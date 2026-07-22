@@ -1,7 +1,7 @@
 {
   "name": "magicpad-companion",
   "private": true,
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "MagicPad Companion — Apple Magic Trackpad 3 / 2 companion for Windows 11 and Linux",
   "type": "module",
   "scripts": {
