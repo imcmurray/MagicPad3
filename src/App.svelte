@@ -22,7 +22,8 @@
 
   let nav: NavId = $state("status");
   let theme: ThemeMode = $state("system");
-  let version = $state("0.1.0");
+  let version = $state("0.2.0");
+  const REPO_URL = "https://github.com/imcmurray/MagicPad3";
   let loading = $state(true);
   let busy = $state(false);
   let error = $state<string | null>(null);
@@ -245,7 +246,16 @@
       <button class="ghost theme-btn" onclick={cycleTheme}>
         Theme: {theme}
       </button>
-      <div class="muted mono">v{version}</div>
+      <div class="foot-meta muted mono">
+        <span>v{version}</span>
+        <button
+          class="linkish"
+          title="Open project on GitHub"
+          onclick={() => openUrl(REPO_URL)}
+        >
+          GitHub
+        </button>
+      </div>
     </div>
   </aside>
 
@@ -378,6 +388,28 @@
     width: 100%;
     text-align: left;
     font-size: 0.85rem;
+  }
+  .foot-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0 0.15rem;
+    font-size: 0.8rem;
+  }
+  .linkish {
+    border: none;
+    background: transparent;
+    color: var(--accent);
+    padding: 0;
+    font: inherit;
+    font-family: inherit;
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  .linkish:hover {
+    filter: brightness(1.1);
   }
   main {
     display: flex;

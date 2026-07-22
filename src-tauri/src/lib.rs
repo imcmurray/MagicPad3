@@ -1,6 +1,7 @@
 //! MagicPad Companion — Tauri application library.
 
 mod commands;
+mod device_group;
 mod error;
 mod models;
 mod platform;

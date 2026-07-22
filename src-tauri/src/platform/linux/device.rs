@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::device_group::collapse_physical_devices;
 use crate::error::AppResult;
 use crate::models::{
     is_known_trackpad_pid, model_name_for_pid, BatteryInfo, ConnectionType, DeviceInfo, APPLE_VID,
@@ -128,6 +129,9 @@ pub fn enumerate_devices() -> AppResult<Vec<DeviceInfo>> {
             d.battery = battery_for_device(d);
         }
     }
+
+    // Final collapse in case input + HID paths both contributed.
+    let mut devices = collapse_physical_devices(devices);
 
     // Stable order: USB-C first, then by id
     devices.sort_by(|a, b| a.id.cmp(&b.id));

@@ -4,6 +4,7 @@
 //! scanning common device instance path patterns via PowerShell-free registry
 //! keys when possible.
 
+use crate::device_group::collapse_physical_devices;
 use crate::error::AppResult;
 use crate::models::{
     is_known_trackpad_pid, model_name_for_pid, BatteryInfo, ConnectionType, DeviceInfo, APPLE_VID,
@@ -26,6 +27,9 @@ pub fn enumerate_devices() -> AppResult<Vec<DeviceInfo>> {
             }
         }
     }
+
+    // One physical trackpad = many HID/USB interfaces on Windows.
+    let mut devices = collapse_physical_devices(devices);
 
     // Ensure battery fields are filled when possible.
     for d in &mut devices {
