@@ -313,12 +313,15 @@ for a in rel.get("assets",[]):
 }
 
 use_local_build() {
-  local deb_glob="$ROOT/src-tauri/target/release/bundle/deb/"*.deb
   local bin="$ROOT/src-tauri/target/release/${APP_ID}"
+  local deb_dir="$ROOT/src-tauri/target/release/bundle/deb"
 
-  # Prefer local .deb if present
-  local deb
-  deb="$(ls -1 $deb_glob 2>/dev/null | head -1 || true)"
+  # Prefer newest local .deb by mtime
+  local deb=""
+  if [[ -d "$deb_dir" ]]; then
+    deb="$(find "$deb_dir" -maxdepth 1 -type f -name '*.deb' -printf '%T@ %p\n' 2>/dev/null \
+      | sort -nr | head -1 | cut -d' ' -f2- || true)"
+  fi
   if [[ -n "$deb" && -f "$deb" ]]; then
     log "Using local DEB: $deb"
     extract_deb "$deb"
