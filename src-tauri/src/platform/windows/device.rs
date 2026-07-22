@@ -52,22 +52,23 @@ fn setupapi_enumerate() -> AppResult<Vec<DeviceInfo>> {
         SetupDiGetDeviceInstanceIdW, DIGCF_PRESENT, DIGCF_ALLCLASSES, SPDRP_DEVICEDESC,
         SPDRP_HARDWAREID, SP_DEVINFO_DATA,
     };
-    use windows::Win32::Foundation::INVALID_HANDLE_VALUE;
 
     let mut out = Vec::new();
 
     unsafe {
-        let handle = SetupDiGetClassDevsW(
+        let handle = match SetupDiGetClassDevsW(
             None,
             windows::core::PCWSTR::null(),
             None,
             DIGCF_PRESENT | DIGCF_ALLCLASSES,
-        )
-        .map_err(|e| crate::error::AppError::msg(format!("SetupDiGetClassDevsW: {e}")))?;
-
-        if handle == INVALID_HANDLE_VALUE {
-            return Ok(out);
-        }
+        ) {
+            Ok(h) => h,
+            Err(e) => {
+                return Err(crate::error::AppError::msg(format!(
+                    "SetupDiGetClassDevsW: {e}"
+                )));
+            }
+        };
 
         let mut index = 0u32;
         loop {
@@ -86,7 +87,14 @@ fn setupapi_enumerate() -> AppResult<Vec<DeviceInfo>> {
             // Instance ID
             let mut id_buf = [0u16; 512];
             let mut req = 0u32;
-            if SetupDiGetDeviceInstanceIdW(handle, &data, Some(&mut id_buf), &mut req).is_err() {
+            if SetupDiGetDeviceInstanceIdW(
+                handle,
+                &data,
+                Some(&mut id_buf),
+                Some(&mut req as *mut u32),
+            )
+            .is_err()
+            {
                 continue;
             }
             let instance = wchar_to_string(&id_buf);
@@ -106,9 +114,12 @@ fn setupapi_enumerate() -> AppResult<Vec<DeviceInfo>> {
 
             let hwids =
                 registry_property_multi(handle, &data, SPDRP_HARDWAREID).unwrap_or_default();
-            let (vid, pid) = parse_vid_pid_from_strings(&hwids).or_else(|| {
-                parse_vid_pid_from_instance(&instance)
-            });
+            let (mut vid, mut pid) = parse_vid_pid_from_strings(&hwids);
+            if vid.is_none() || pid.is_none() {
+                let (v2, p2) = parse_vid_pid_from_instance(&instance);
+                vid = vid.or(v2);
+                pid = pid.or(p2);
+            }
 
             if let Some(p) = pid {
                 if !is_known_trackpad_pid(p) && !upper.contains("TRACKPAD") {
@@ -186,7 +197,7 @@ unsafe fn registry_property_string(
         prop,
         Some(&mut reg_type),
         Some(&mut buf),
-        &mut req,
+        Some(&mut req as *mut u32),
     )
     .is_err()
     {
@@ -216,7 +227,7 @@ unsafe fn registry_property_multi(
         prop,
         Some(&mut reg_type),
         Some(&mut buf),
-        &mut req,
+        Some(&mut req as *mut u32),
     )
     .is_err()
     {
