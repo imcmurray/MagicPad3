@@ -84,16 +84,17 @@ jobs:
           tag_name: ${{ steps.tag.outputs.name }}
           name: MagicPad Companion ${{ steps.tag.outputs.name }}
           draft: false
-          prerelease: true
+          prerelease: false
+          make_latest: true
           generate_release_notes: true
           body: |
-            ## Home PC testing build
+            ## MagicPad Companion
 
             ### Windows 11
-            1. Download the **NSIS** `.exe` installer (or portable `magicpad-companion.exe`).
+            1. Download **MagicPad.Companion_*_x64-setup.exe** (or portable `magicpad-companion.exe`).
             2. SmartScreen may warn (unsigned app) → More info → Run anyway.
-            3. For Precision gestures, also install the **Microsoft-signed** trackpad driver
-               from [vitoplantamura/MagicTrackpad2ForWindows](https://github.com/vitoplantamura/MagicTrackpad2ForWindows/releases)
+            3. For Precision gestures, install the Microsoft-signed trackpad driver from
+               [vitoplantamura/MagicTrackpad2ForWindows](https://github.com/vitoplantamura/MagicTrackpad2ForWindows/releases)
                into `%LOCALAPPDATA%\MagicPadCompanion\drivers\` then **Driver → Install** in the app.
 
             Full guide: [docs/windows-install.md](https://github.com/imcmurray/MagicPad3/blob/main/docs/windows-install.md)
