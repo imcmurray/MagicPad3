@@ -62,6 +62,30 @@ Live UI tour (Status → Settings → Gestures → Driver → Logs → Help):
 
 ---
 
+## Test on a home Windows PC
+
+**You do not need to sign the trackpad drivers.** Use the Microsoft-signed upstream Precision package; MagicPad only installs what you place in a local folder.
+
+1. **App** — grab a Windows build from [Releases](https://github.com/imcmurray/MagicPad3/releases)  
+   or the latest **windows-installers** artifact under [Actions](https://github.com/imcmurray/MagicPad3/actions).
+2. **Folders + checklist** (optional PowerShell helper from a clone):
+
+   ```powershell
+   Set-ExecutionPolicy -Scope Process Bypass
+   .\scripts\windows-home-setup.ps1
+   ```
+
+3. **Driver** — download [MagicTrackpad2ForWindows](https://github.com/vitoplantamura/MagicTrackpad2ForWindows/releases),  
+   extract `AMD64` (or `ARM64`) under `%LOCALAPPDATA%\MagicPadCompanion\drivers\`,  
+   then in the app: **Driver → Install driver** (Admin once if needed).
+4. Replug USB-C or re-pair Bluetooth; confirm **Status** + gestures.
+
+Full walkthrough: **[docs/windows-install.md](docs/windows-install.md)**
+
+SmartScreen may warn on unsigned test builds → **More info → Run anyway**.
+
+---
+
 ## Quick start (development)
 
 ### Prerequisites
@@ -113,11 +137,13 @@ Artifacts:
 
 AppImage bundling requires [linuxdeploy](https://github.com/linuxdeploy/linuxdeploy) on the PATH; DEB builds without it.
 
+CI builds **Windows NSIS/MSI + portable EXE** and **Linux DEB** on every push to `main`.
+
 ---
 
 ## Installation guides
 
-- [Windows 11](docs/windows-install.md) — app + Precision driver  
+- [Windows 11 / home PC testing](docs/windows-install.md) — app + Precision driver  
 - [EndeavourOS / Linux](docs/linux-install.md) — app + udev / remapper  
 - [Troubleshooting](docs/troubleshooting.md)
 

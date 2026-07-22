@@ -28,16 +28,32 @@ jobs:
       - name: Cargo check
         working-directory: src-tauri
         run: cargo check
+      - name: Tauri DEB (smoke)
+        run: npm run tauri -- build --bundles deb
+      - uses: actions/upload-artifact@v4
+        if: github.event_name != 'pull_request'
+        with:
+          name: linux-deb
+          path: src-tauri/target/release/bundle/deb/*.deb
+          if-no-files-found: warn
 
-  # Windows full tauri build is best done on windows-latest with MSVC.
-  # Uncomment when code signing / driver packaging pipeline is ready.
-  # windows:
-  #   runs-on: windows-latest
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - uses: dtolnay/rust-toolchain@stable
-  #     - uses: actions/setup-node@v4
-  #       with:
-  #         node-version: "22"
-  #     - run: npm install
-  #     - run: npm run tauri build
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci || npm install
+      - name: Build Tauri (NSIS + MSI)
+        run: npm run tauri -- build --bundles nsis,msi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installers
+          path: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/magicpad-companion.exe
+          if-no-files-found: error

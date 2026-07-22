@@ -2,6 +2,17 @@
 
 See also the in-app **Help** tab.
 
+## Windows home testing
+
+| Symptom | Fix |
+|---------|-----|
+| SmartScreen blocks app | More info → Run anyway (test builds are unsigned) |
+| Driver install fails | Put INF under `%LOCALAPPDATA%\MagicPadCompanion\drivers\AMD64\`; run app as Admin once |
+| No gestures after install | Replug USB-C / re-pair BT; remove Magic Utilities / Trackpad++ |
+| Need a build | [Releases](https://github.com/imcmurray/MagicPad3/releases) or Actions artifact `windows-installers` |
+
+Full guide: [windows-install.md](./windows-install.md)
+
 ## USB issues
 
 | Symptom | Fix |

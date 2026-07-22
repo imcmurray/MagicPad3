@@ -29,6 +29,12 @@ Or next to the installed EXE:
 
 Then use **Driver → Install driver** in the app (Administrator may be required for `pnputil`).
 
+Home PC helper (creates the drivers folder and opens release pages):
+
+```powershell
+.\scripts\windows-home-setup.ps1
+```
+
 ## Hardware IDs (USB)
 
 | Device | Typical HWID |
