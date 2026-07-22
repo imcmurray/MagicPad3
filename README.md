@@ -147,12 +147,18 @@ CI builds **Windows NSIS/MSI + portable EXE** and **Linux DEB** on every push to
 - [EndeavourOS / Linux](docs/linux-install.md) — app + udev / remapper  
 - [Troubleshooting](docs/troubleshooting.md)
 
-### Linux helpers only
+### EndeavourOS / Arch (one-shot installer)
 
 ```bash
-chmod +x scripts/install-linux.sh
-./scripts/install-linux.sh
+git clone https://github.com/imcmurray/MagicPad3.git
+cd MagicPad3
+chmod +x scripts/install-endeavouros.sh
+./scripts/install-endeavouros.sh
+# then: magicpad-companion
 ```
+
+Options: `--local` (use a local `tauri build`), `--user`, `--helpers`, `--uninstall`.  
+See [docs/linux-install.md](docs/linux-install.md).
 
 ### Windows driver package fetch
 
