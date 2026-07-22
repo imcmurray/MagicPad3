@@ -1,0 +1,13 @@
+{
+  "version": "0.1",
+  "generator": "MagicPad Companion",
+  "device": "Magic Trackpad",
+  "note": "Starter profile. Import into input-remapper and bind compositor shortcuts.",
+  "mappings": [
+    { "trigger": "3finger_swipe_left", "action": "workspace_prev" },
+    { "trigger": "3finger_swipe_right", "action": "workspace_next" },
+    { "trigger": "3finger_swipe_up", "action": "overview" },
+    { "trigger": "3finger_swipe_down", "action": "app_expose" },
+    { "trigger": "4finger_swipe_up", "action": "show_desktop" }
+  ]
+}

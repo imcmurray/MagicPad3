@@ -1,0 +1,22 @@
+# MagicPad Companion — udev rules for Apple Magic Trackpad
+# Vendor: Apple (05ac)
+# Magic Trackpad 3 USB-C: 0324 (and variants)
+# Magic Trackpad 2: 0265, 030e
+# Magic Trackpad 1 / legacy: 024f, 0229
+
+# Tag Apple trackpad HID devices for user-space helpers
+SUBSYSTEM=="hid", ATTRS{idVendor}=="05ac", ATTRS{idProduct}=="0324", MODE="0660", GROUP="input", TAG+="uaccess", TAG+="magic_trackpad"
+SUBSYSTEM=="hid", ATTRS{idVendor}=="05ac", ATTRS{idProduct}=="0325", MODE="0660", GROUP="input", TAG+="uaccess", TAG+="magic_trackpad"
+SUBSYSTEM=="hid", ATTRS{idVendor}=="05ac", ATTRS{idProduct}=="0265", MODE="0660", GROUP="input", TAG+="uaccess", TAG+="magic_trackpad"
+SUBSYSTEM=="hid", ATTRS{idVendor}=="05ac", ATTRS{idProduct}=="030e", MODE="0660", GROUP="input", TAG+="uaccess", TAG+="magic_trackpad"
+SUBSYSTEM=="hid", ATTRS{idVendor}=="05ac", ATTRS{idProduct}=="024f", MODE="0660", GROUP="input", TAG+="uaccess", TAG+="magic_trackpad"
+SUBSYSTEM=="hid", ATTRS{idVendor}=="05ac", ATTRS{idProduct}=="0229", MODE="0660", GROUP="input", TAG+="uaccess", TAG+="magic_trackpad"
+
+# USB device nodes
+SUBSYSTEM=="usb", ATTR{idVendor}=="05ac", ATTR{idProduct}=="0324", MODE="0660", GROUP="input", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTR{idVendor}=="05ac", ATTR{idProduct}=="0325", MODE="0660", GROUP="input", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTR{idVendor}=="05ac", ATTR{idProduct}=="0265", MODE="0660", GROUP="input", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTR{idVendor}=="05ac", ATTR{idProduct}=="030e", MODE="0660", GROUP="input", TAG+="uaccess"
+
+# Input event nodes that identify as Magic Trackpad
+KERNEL=="event*", SUBSYSTEM=="input", ATTRS{name}=="*Magic Trackpad*", MODE="0660", GROUP="input", TAG+="uaccess", TAG+="magic_trackpad"

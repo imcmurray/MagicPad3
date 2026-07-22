@@ -1,0 +1,15 @@
+[Unit]
+Description=MagicPad Companion helper (optional gesture / reconnect watch)
+Documentation=https://github.com/imcmurray/MagicPad3
+After=graphical-session.target
+
+[Service]
+Type=simple
+# Placeholder: enable when the optional gesture daemon is shipped.
+# ExecStart=%h/.local/bin/magicpad-daemon
+ExecStart=/bin/true
+RemainAfterExit=yes
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

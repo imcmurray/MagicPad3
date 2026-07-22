@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install Linux deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget \
+            file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev \
+            patchelf
+      - run: npm ci || npm install
+      - name: Frontend build
+        run: npm run build
+      - name: Cargo check
+        working-directory: src-tauri
+        run: cargo check
+
+  # Windows full tauri build is best done on windows-latest with MSVC.
+  # Uncomment when code signing / driver packaging pipeline is ready.
+  # windows:
+  #   runs-on: windows-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: dtolnay/rust-toolchain@stable
+  #     - uses: actions/setup-node@v4
+  #       with:
+  #         node-version: "22"
+  #     - run: npm install
+  #     - run: npm run tauri build

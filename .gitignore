@@ -1,0 +1,43 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build
+dist/
+src-tauri/target/
+target/
+*.AppImage
+*.deb
+*.rpm
+*.msi
+*.exe
+*.dmg
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+logs/
+
+# Driver download cache (not redistributed by default)
+packaging/windows/drivers/
+packaging/windows/*.zip
+
+# Generated
+src-tauri/gen/
+.svelte-kit/
+
+# Cargo
+**/*.rs.bk
+Cargo.lock.bak
