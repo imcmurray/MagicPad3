@@ -127,7 +127,7 @@ fn run_libinput_session(map: &GestureMap) -> Result<(), String> {
 
         // Help diagnose devices that emit gestures under unexpected names
         if line.to_ascii_uppercase().contains("GESTURE_") {
-            log::debug!("libinput: {line}");
+            log::info!("libinput: {line}");
         }
 
         if let Some(ev) = parse_event(line) {
@@ -898,27 +898,7 @@ fn user_in_input_group_passwd() -> bool {
 }
 
 fn can_read_trackpad_events() -> bool {
-    // Prefer probing via `sg input` if available (matches service wrapper)
-    if which("sg") {
-        let status = Command::new("sg")
-            .args([
-                "input",
-                "-c",
-                "python3 -c \"import glob; import sys;\n\
-ok=False\n\
-for p in glob.glob('/dev/input/event*'):\n\
-  try:\n\
-    open(p,'rb').close(); ok=True; break\n\
-  except Exception:\n\
-    pass\n\
-sys.exit(0 if ok else 1)\"",
-            ])
-            .status();
-        if let Ok(s) = status {
-            return s.success();
-        }
-    }
-    // Direct probe
+    // Direct probe with current credentials
     if let Ok(rd) = std::fs::read_dir("/dev/input") {
         for ent in rd.flatten() {
             let name = ent.file_name();
@@ -929,6 +909,28 @@ sys.exit(0 if ok else 1)\"",
             if std::fs::File::open(ent.path()).is_ok() {
                 return true;
             }
+        }
+    }
+    // Session may lack input group while /etc/group has it — probe via sg
+    if which("sg") {
+        let status = Command::new("sg")
+            .args(["input", "-c", "test -r /dev/input/event0 -o -r /dev/input/event3 -o -r /dev/input/event8"])
+            .status();
+        if let Ok(s) = status {
+            if s.success() {
+                return true;
+            }
+        }
+        // Broader: any event* readable under sg
+        let status = Command::new("sg")
+            .args([
+                "input",
+                "-c",
+                "sh -c 'for f in /dev/input/event*; do test -r \"$f\" && exit 0; done; exit 1'",
+            ])
+            .status();
+        if let Ok(s) = status {
+            return s.success();
         }
     }
     false
