@@ -599,25 +599,43 @@ EOF
 }
 
 # ── Dependencies ────────────────────────────────────────────────────────────
+# True when the runtime stack we need is already present (skip sudo pacman).
+deps_already_ok() {
+  command -v pacman >/dev/null 2>&1 || return 1
+  # Critical runtime + gesture tools
+  pacman -Q webkit2gtk-4.1 gtk3 libappindicator-gtk3 librsvg xdg-utils \
+    binutils tar curl libinput-tools wtype &>/dev/null
+}
+
 install_deps() {
   is_arch_family || warn "Not detected as Arch/EndeavourOS — pacman steps may fail."
 
-  need_cmd pacman
-  log "Installing runtime packages (pacman)…"
-  local pkgs=(
-    webkit2gtk-4.1
-    gtk3
-    libappindicator-gtk3
-    librsvg
-    xdg-utils
-    binutils
-    tar
-    curl
-    polkit
-    libinput-tools
-    wtype
-  )
-  run_root pacman -S --needed --noconfirm "${pkgs[@]}"
+  if deps_already_ok; then
+    log "Runtime packages already installed — skipping pacman."
+  else
+    need_cmd pacman
+    log "Installing runtime packages (pacman)…"
+    local pkgs=(
+      webkit2gtk-4.1
+      gtk3
+      libappindicator-gtk3
+      librsvg
+      xdg-utils
+      binutils
+      tar
+      curl
+      polkit
+      libinput-tools
+      wtype
+    )
+    # Soft-fail: user can re-run with sudo if packages are missing
+    if ! run_root pacman -S --needed --noconfirm "${pkgs[@]}"; then
+      warn "pacman failed (need sudo?). Re-run in a terminal if packages are missing."
+      if ! command -v libinput >/dev/null 2>&1 || ! command -v wtype >/dev/null 2>&1; then
+        die "Missing libinput-tools or wtype — install packages then re-run."
+      fi
+    fi
+  fi
 
   # Gesture daemon needs /dev/input access (account membership; sg handles session lag)
   ensure_input_group
@@ -1091,6 +1109,12 @@ main() {
   fi
 
   install_gesture_daemon || true
+
+  # If the GUI is already running, it keeps the old binary mapped — remind user
+  if pgrep -x magicpad-compan >/dev/null 2>&1 || pgrep -x magicpad-companion >/dev/null 2>&1; then
+    warn "MagicPad is still running — quit and reopen it to load the new UI."
+  fi
+
   print_next_steps
   do_verify || true
 }
