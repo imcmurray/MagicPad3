@@ -8,6 +8,8 @@ Cross-platform companion for the **Apple Magic Trackpad 3 (A3120, USB-C)** and e
 
 Built with **Rust + Tauri 2 + Svelte**.
 
+**What's new:** [docs/whats-new.md](./docs/whats-new.md) · latest release: [v0.3.3](https://github.com/imcmurray/MagicPad3/releases/tag/v0.3.3)
+
 ---
 
 ## Architecture (summary)

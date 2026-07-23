@@ -24,6 +24,14 @@
   let theme: ThemeMode = $state("system");
   let version = $state("0.3.3");
   const REPO_URL = "https://github.com/imcmurray/MagicPad3";
+  // GitHub heading anchor for "## v0.3.3" → #v033 (punctuation stripped)
+  function whatsNewUrl(v: string): string {
+    const anchor = `v${v.replace(/\./g, "")}`;
+    return `${REPO_URL}/blob/main/docs/whats-new.md#${anchor}`;
+  }
+  function releaseUrl(v: string): string {
+    return `${REPO_URL}/releases/tag/v${v}`;
+  }
   let loading = $state(true);
   let busy = $state(false);
   let error = $state<string | null>(null);
