@@ -963,12 +963,18 @@ fn install_autostart() -> Result<(), String> {
         .map_err(|e| e.to_string())?
         .display()
         .to_string();
+    // Same `sg input` model as the systemd unit — session groups lag after usermod.
+    let exec = if which("sg") {
+        format!("/usr/bin/sg input -c '{exe} --gestures'")
+    } else {
+        format!("{exe} --gestures")
+    };
     let body = format!(
         r#"[Desktop Entry]
 Type=Application
 Name=MagicPad Gestures
 Comment=Multi-finger trackpad gestures for MagicPad Companion
-Exec={exe} --gestures
+Exec={exec}
 X-GNOME-Autostart-enabled=true
 Hidden=false
 NoDisplay=true

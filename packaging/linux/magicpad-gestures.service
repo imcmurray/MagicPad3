@@ -6,8 +6,8 @@ After=graphical-session.target
 
 [Service]
 Type=simple
-# Installed path may be /usr/local/bin or ~/.local/bin — the app rewrites this.
-# `sg input` applies the input group without requiring a full re-login.
+# Installed path may be /usr/local/bin or ~/.local/bin — the installer/app rewrites this.
+# `sg input` applies the input group without requiring a full re-login (session groups lag).
 ExecStart=/usr/bin/sg input -c '/usr/local/bin/magicpad-companion --gestures'
 Restart=on-failure
 RestartSec=2
@@ -15,3 +15,4 @@ Environment=RUST_LOG=info
 
 [Install]
 WantedBy=graphical-session.target
+WantedBy=default.target

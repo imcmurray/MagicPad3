@@ -157,8 +157,8 @@ chmod +x scripts/install-endeavouros.sh
 # then: magicpad-companion
 ```
 
-Options: `--local`, `--user`, `--helpers`, `--gestures` (daemon only), `--no-gestures`, `--uninstall`.  
-The default install also enables the **multi-finger gesture daemon** (`magicpad-gestures.service`).  
+Options: `--local`, `--user`, `--helpers`, `--gestures` (daemon only), `--no-gestures`, `--verify`, `--uninstall`.  
+The default install also enables the **multi-finger gesture daemon** (`magicpad-gestures.service` under `sg input`), seeds gestures, syncs dual install paths, and runs a post-install checklist.  
 See [docs/linux-install.md](docs/linux-install.md).
 
 ### Windows driver package fetch
@@ -208,9 +208,9 @@ MagicPad3/
 - [x] Device scan (SetupAPI / sysfs)  
 - [x] Settings + gestures UI  
 - [x] Driver / udev install hooks  
+- [x] Linux multi-finger gesture daemon (libinput → wtype; Budgie/labwc)  
 - [ ] Live battery via PTP IOCTL / HID feature reports  
 - [ ] Full input-remapper schema export  
-- [ ] Optional Rust gesture daemon for labwc  
 - [ ] Signed Windows CI release pipeline  
 - [ ] macOS IOKit device listing  
 

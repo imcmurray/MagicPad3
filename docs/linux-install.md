@@ -2,7 +2,7 @@
 
 ## Quick install (recommended)
 
-One script installs runtime deps, the latest GitHub **.deb** release (extracted for Arch), desktop entry, icons, and **udev** helpers:
+One script installs runtime deps, the latest GitHub **.deb** release (extracted for Arch), desktop entry, icons, **udev** helpers, and the **gesture daemon**:
 
 ```bash
 git clone https://github.com/imcmurray/MagicPad3.git
@@ -16,6 +16,7 @@ Then:
 ```bash
 magicpad-companion
 # or open “MagicPad Companion” from the app menu
+./scripts/install-endeavouros.sh --verify   # checklist
 ```
 
 Replug the Magic Trackpad (or re-pair Bluetooth) and open the **Status** tab.
@@ -31,9 +32,10 @@ Replug the Magic Trackpad (or re-pair Bluetooth) and open the **Status** tab.
 | `--helpers` | udev + remapper staging **+ gesture daemon** |
 | `--gestures` | Gesture daemon only (app already installed) |
 | `--no-gestures` | Full/helpers install without starting the daemon |
+| `--verify` | Post-install checklist (binary, packages, input group, unit, daemon) |
 | `--with-remapper` | Also `pacman -S input-remapper` if available |
 | `--skip-deps` | Skip pacman package install |
-| `--uninstall` | Remove app, udev rule, and gesture service |
+| `--uninstall` | Remove app (all known paths), udev rule, and gesture service |
 
 Examples:
 
@@ -50,9 +52,28 @@ npm run tauri -- build --bundles deb
 
 # User-local binary (no root for app files)
 ./scripts/install-endeavouros.sh --user
+
+# Checklist only
+./scripts/install-endeavouros.sh --verify
 ```
 
 `scripts/install-linux.sh` is a thin wrapper around the same script.
+
+### What the installer always does
+
+1. **Packages**: WebKit/GTK runtime + `libinput-tools` + `wtype` (+ `binutils` to unpack release `.deb`)
+2. **`input` group**: `usermod -aG input` (account membership via getent — not session groups)
+3. **App binary**: installs under `/usr/local` (or `~/.local` with `--user`) and **syncs every other known path** so PATH never keeps a stale copy (`~/.local/bin` is often *before* `/usr/local/bin`)
+4. **udev** rule for Magic Trackpad
+5. **Gesture daemon**:
+   - Seeds `~/.config/magicpad-companion/gestures.json` if missing
+   - Writes `~/.config/systemd/user/magicpad-gestures.service` with  
+     `ExecStart=/usr/bin/sg input -c '…/magicpad-companion --gestures'`
+   - XDG autostart with the same `sg input` wrapper
+   - `systemctl --user enable --now magicpad-gestures.service`
+6. **Verify** checklist at the end of full / helpers / gestures installs
+
+`sg input` matters because session supplementary groups lag until re-login after `usermod`. Account membership in `/etc/group` is enough for the daemon.
 
 ---
 
@@ -66,7 +87,8 @@ npm run tauri -- build --bundles deb
 
 ```bash
 sudo pacman -S --needed webkit2gtk-4.1 gtk3 libappindicator-gtk3 \
-  librsvg xdg-utils binutils tar curl polkit
+  librsvg xdg-utils binutils tar curl polkit \
+  libinput-tools wtype
 ```
 
 ## Manual install from a release `.deb`
@@ -75,15 +97,16 @@ Arch does not use dpkg by default. The installer extracts the DEB:
 
 ```bash
 # Or let the script download it
-curl -LO https://github.com/imcmurray/MagicPad3/releases/latest/download/MagicPad.Companion_0.2.2_amd64.deb
-./scripts/install-endeavouros.sh --deb ./MagicPad.Companion_0.2.2_amd64.deb
+curl -LO https://github.com/imcmurray/MagicPad3/releases/latest/download/MagicPad.Companion_0.3.3_amd64.deb
+./scripts/install-endeavouros.sh --deb ./MagicPad.Companion_0.3.3_amd64.deb
 ```
 
 ## Build from source
 
 ```bash
 sudo pacman -S --needed rust nodejs npm webkit2gtk-4.1 base-devel \
-  curl wget openssl appmenu-gtk-module libappindicator-gtk3 librsvg
+  curl wget openssl appmenu-gtk-module libappindicator-gtk3 librsvg \
+  libinput-tools wtype
 
 git clone https://github.com/imcmurray/MagicPad3.git
 cd MagicPad3
@@ -101,6 +124,8 @@ npm run tauri dev
 ./scripts/run.sh
 ```
 
+**Note:** `tauri dev` serves the UI from `http://localhost:1420` (dev CSP). For production IPC and the correct app icon, use a full `tauri build` + `--local` install.
+
 ## System helpers (udev)
 
 Installed automatically by the full installer. Manual:
@@ -114,7 +139,9 @@ Add yourself to the `input` group if event nodes are restricted:
 
 ```bash
 sudo usermod -aG input "$USER"
-# re-login
+# Account membership is enough for the daemon (sg input).
+# Full re-login only needed for *this shell's* `id -nG` to list input.
+systemctl --user restart magicpad-gestures.service
 ```
 
 ## Multi-finger gestures (Budgie / labwc)
@@ -123,18 +150,10 @@ Windows uses the Precision driver for gestures. On Linux, **labwc does not
 bind 3/4-finger swipes natively**, so MagicPad runs a small user daemon:
 
 ```
-libinput debug-events  →  detect swipes  →  wtype (Super+Page Up/Down, …)
+libinput debug-events  →  detect swipes/taps/pinch  →  wtype / commands
 ```
 
 ### One-time setup (installer does this)
-
-The EndeavourOS installer (`./scripts/install-endeavouros.sh`) by default:
-
-1. Installs **libinput-tools** and **wtype**
-2. Adds your user to the **input** group
-3. Seeds `~/.config/magicpad-companion/gestures.json` (if missing)
-4. Installs and enables **`magicpad-gestures.service`** (user systemd)
-5. Adds an XDG autostart entry as backup
 
 ```bash
 # Full install (includes daemon)
@@ -143,11 +162,6 @@ The EndeavourOS installer (`./scripts/install-endeavouros.sh`) by default:
 # Or only the daemon, if the app is already installed
 ./scripts/install-endeavouros.sh --gestures
 ```
-
-If you were just added to `input`, either **log out and back in**, or re-run
-`./scripts/install-endeavouros.sh --gestures` — the service uses `sg input` so
-a full re-login is usually not required after the group membership exists in
-`/etc/group`.
 
 ### Enable / repair from the app
 
@@ -158,15 +172,17 @@ a full re-login is usually not required after the group membership exists in
 ```bash
 systemctl --user status magicpad-gestures.service
 systemctl --user restart magicpad-gestures.service
+journalctl --user -u magicpad-gestures.service -f
 ```
 
 ### Default Budgie/labwc mappings
 
-| Gesture | Action | Shortcut injected |
-|---------|--------|-------------------|
+| Gesture | Action | Shortcut / command |
+|---------|--------|--------------------|
 | 3-finger swipe L/R | Prev/Next desktop | Super+Page Up/Down |
 | 3-finger swipe up | App switcher | Super+Tab |
 | 3-finger swipe down | Alt+Tab | Alt+Tab |
+| 4-finger swipe L/R | Browser back/forward | XF86Back / mouse 8–9 cascade |
 | 4-finger swipe up | Show desktop | Super+D |
 | 4-finger swipe down | Raven panel | Super+A |
 | Pinch out | Zoom in | Ctrl+= |
@@ -176,7 +192,8 @@ systemctl --user restart magicpad-gestures.service
 
 Pinch zoom works in Firefox, Chromium, many Electron apps, LibreOffice, etc.
 Focus the window you want to zoom first. Multi-finger taps use libinput
-**hold** gestures (short hold ≈ tap).
+**hold** gestures and require **3+ fingers** (1-finger holds are ignored so a
+normal click does not open Screenshot).
 
 ### Custom command example: Flameshot on 4-finger tap
 
@@ -204,8 +221,26 @@ You can put any shell command in **Custom** (e.g. `kitty`, `notify-send 'hi'`, a
 libinput debug-events
 # inject a workspace switch
 wtype -M logo -k Prior -m logo
-magicpad-companion --gestures   # foreground daemon
+# foreground daemon (uses current shell groups — prefer the systemd unit with sg)
+sg input -c 'magicpad-companion --gestures'
 ```
+
+### Troubleshooting dual installs
+
+If the menu or `magicpad-companion` still shows an old version (e.g. 0.2.x after installing 0.3.x):
+
+```bash
+which -a magicpad-companion
+# often both exist:
+#   ~/.local/bin/magicpad-companion    ← earlier on PATH
+#   /usr/local/bin/magicpad-companion
+./scripts/install-endeavouros.sh --local   # syncs every known path
+./scripts/install-endeavouros.sh --verify
+```
+
+### Troubleshooting “not in input group” in Status
+
+The Status checklist uses **account** membership (`getent group input` / `id -nG $USER`), not the current process’s session groups. If you already ran `usermod` and the daemon is active under `sg input`, a red ✗ should clear after the fix in v0.3.3+ — reinstall from a current build if it still lies.
 
 ## input-remapper (optional advanced)
 
@@ -225,9 +260,11 @@ Profiles are staged under:
 ## Verify
 
 ```bash
+./scripts/install-endeavouros.sh --verify
 lsusb | grep -i 05ac
 libinput list-devices | grep -i -A5 trackpad
 magicpad-companion
+systemctl --user status magicpad-gestures.service
 ```
 
 In the app **Status** tab you should see a single Magic Trackpad entry (USB-C / Bluetooth).
@@ -236,6 +273,7 @@ In the app **Status** tab you should see a single Magic Trackpad entry (USB-C / 
 
 ```bash
 ./scripts/install-endeavouros.sh --uninstall
+# Removes binaries under /usr/local, /usr, and ~/.local, plus udev + gesture unit.
 # Config left at: ~/.config/magicpad-companion
 ```
 

@@ -16,6 +16,7 @@
 #   ./scripts/install-endeavouros.sh --local      # use local tauri release build
 #   ./scripts/install-endeavouros.sh --deb PATH   # install from a specific .deb
 #   ./scripts/install-endeavouros.sh --user       # install app under ~/.local
+#   ./scripts/install-endeavouros.sh --verify     # post-install checklist only
 #   ./scripts/install-endeavouros.sh --uninstall  # remove app + udev + gesture service
 #
 # Docs: https://github.com/imcmurray/MagicPad3/blob/main/docs/linux-install.md
@@ -39,7 +40,7 @@ APP_NAME="MagicPad Companion"
 LIB_DIR_NAME="MagicPad Companion"
 GESTURES_UNIT="magicpad-gestures.service"
 
-MODE="full"          # full | helpers | gestures | uninstall
+MODE="full"          # full | helpers | gestures | uninstall | verify
 SOURCE="release"     # release | local | deb
 DEB_PATH=""
 USER_INSTALL=0
@@ -50,6 +51,8 @@ INSTALL_GESTURES=1   # 0 with --no-gestures
 log()  { printf '==> %s\n' "$*"; }
 warn() { printf 'WARNING: %s\n' "$*" >&2; }
 die()  { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+ok()   { printf '  [ok] %s\n' "$*"; }
+fail() { printf '  [!!] %s\n' "$*"; }
 
 usage() {
   awk 'NR==1{next} /^#/{sub(/^# ?/,""); print; next} {exit}' "$0"
@@ -71,6 +74,7 @@ while [[ $# -gt 0 ]]; do
     --user) USER_INSTALL=1; shift ;;
     --skip-deps) SKIP_DEPS=1; shift ;;
     --with-remapper) WITH_REMAPPER=1; shift ;;
+    --verify|--check) MODE="verify"; shift ;;
     --uninstall) MODE="uninstall"; shift ;;
     -h|--help) usage ;;
     *) die "Unknown option: $1 (try --help)" ;;
@@ -96,23 +100,64 @@ target_uid() {
   id -u "$(target_user)"
 }
 
+# Account membership in `input` (getent /etc/group + id user) — NOT session groups.
+# Session groups lag after usermod until re-login; the daemon uses `sg input` so
+# account membership is what matters.
+account_in_input_group() {
+  local u="${1:-$(target_user)}"
+  # getent group input → input:x:GID:user1,user2
+  if getent group input 2>/dev/null | awk -F: -v u="$u" '
+      {
+        n = split($4, m, ",");
+        for (i = 1; i <= n; i++) if (m[i] == u) exit 0;
+        exit 1
+      }'; then
+    return 0
+  fi
+  # id -nG <user> reflects account DB, not this process's supplementary groups
+  if id -nG "$u" 2>/dev/null | tr ' ' '\n' | grep -qx input; then
+    return 0
+  fi
+  return 1
+}
+
+ensure_input_group() {
+  local u
+  u="$(target_user)"
+  if account_in_input_group "$u"; then
+    log "User $u is in the input group (account membership)."
+    return 0
+  fi
+  log "Adding $u to the 'input' group (required to read trackpad events)…"
+  run_root usermod -aG input "$u"
+  if account_in_input_group "$u"; then
+    log "Added $u to input. Daemon uses 'sg input' so a full re-login is usually not required."
+    warn "Session groups may still lag until you log out/in; Status UI is fine either way."
+  else
+    warn "usermod may have failed — check: getent group input"
+  fi
+}
+
 # Run a command as the desktop user (for systemctl --user, writing ~/.config)
 as_user() {
   local u
   u="$(target_user)"
   if [[ "$(id -u)" -eq 0 && "$u" != "root" ]]; then
-    local uid runtime
+    local uid runtime home
     uid="$(id -u "$u")"
+    home="$(getent passwd "$u" | cut -d: -f6)"
     runtime="/run/user/${uid}"
     if command -v sudo >/dev/null 2>&1; then
       sudo -u "$u" --preserve-env=WAYLAND_DISPLAY \
-        env "HOME=$(getent passwd "$u" | cut -d: -f6)" \
+        env "HOME=$home" \
             "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-$runtime}" \
-            "XDG_CONFIG_HOME=$(getent passwd "$u" | cut -d: -f6)/.config" \
+            "XDG_CONFIG_HOME=${home}/.config" \
+            "USER=$u" \
+            "LOGNAME=$u" \
             "$@"
     else
-      runuser -u "$u" -- env "HOME=$(getent passwd "$u" | cut -d: -f6)" \
-        "XDG_RUNTIME_DIR=${runtime}" "$@"
+      runuser -u "$u" -- env "HOME=$home" \
+        "XDG_RUNTIME_DIR=${runtime}" "USER=$u" "$@"
     fi
   else
     "$@"
@@ -139,9 +184,10 @@ run_root() {
   fi
 }
 
+# Always use the target user's home (correct under sudo + --user)
 prefix_bin() {
   if [[ "$USER_INSTALL" -eq 1 ]]; then
-    echo "${HOME}/.local/bin"
+    echo "$(target_home)/.local/bin"
   else
     echo "/usr/local/bin"
   fi
@@ -149,7 +195,7 @@ prefix_bin() {
 
 prefix_share() {
   if [[ "$USER_INSTALL" -eq 1 ]]; then
-    echo "${HOME}/.local/share"
+    echo "$(target_home)/.local/share"
   else
     echo "/usr/local/share"
   fi
@@ -157,9 +203,35 @@ prefix_share() {
 
 prefix_lib() {
   if [[ "$USER_INSTALL" -eq 1 ]]; then
-    echo "${HOME}/.local/lib"
+    echo "$(target_home)/.local/lib"
   else
     echo "/usr/local/lib"
+  fi
+}
+
+all_known_bins() {
+  # Prints every path we might have installed the app binary to
+  local home
+  home="$(target_home)"
+  printf '%s\n' \
+    "${home}/.local/bin/${APP_ID}" \
+    "/usr/local/bin/${APP_ID}" \
+    "/usr/bin/${APP_ID}" \
+    "$(prefix_bin)/${APP_ID}"
+}
+
+sg_or_direct_exec() {
+  # Build an Exec= line that runs the binary under `sg input` when possible
+  local exe="$1"
+  local args="${2:---gestures}"
+  if command -v sg >/dev/null 2>&1; then
+    local sg_bin
+    sg_bin="$(command -v sg)"
+    # Prefer absolute sg for systemd
+    [[ -x /usr/bin/sg ]] && sg_bin="/usr/bin/sg"
+    echo "${sg_bin} input -c '${exe} ${args}'"
+  else
+    echo "${exe} ${args}"
   fi
 }
 
@@ -206,19 +278,36 @@ do_uninstall() {
     log "Stopping gesture daemon…"
     as_user systemctl --user disable --now "$GESTURES_UNIT" 2>/dev/null || true
   fi
+  # Also kill any leftover foreground / autostart instances
+  as_user pkill -f "${APP_ID} --gestures" 2>/dev/null || true
+
   local home cfg
   home="$(target_home)"
   cfg="${home}/.config"
   remove_path "${cfg}/systemd/user/${GESTURES_UNIT}"
   remove_path "${cfg}/autostart/magicpad-gestures.desktop"
 
-  remove_path "$(prefix_bin)/${APP_ID}"
-  remove_path "$(prefix_lib)/${LIB_DIR_NAME}"
-  remove_path "$(prefix_share)/applications/${APP_ID}.desktop"
-  remove_path "$(prefix_share)/applications/${APP_NAME}.desktop"
-  for s in 32x32 128x128 256x256 256x256@2; do
-    remove_path "$(prefix_share)/icons/hicolor/${s}/apps/${APP_ID}.png"
+  # Remove every known binary install path (avoid stale dual-install leftovers)
+  local p
+  while IFS= read -r p; do
+    [[ -n "$p" ]] || continue
+    remove_path "$p"
+  done < <(all_known_bins | sort -u)
+
+  # Both system and user resource trees
+  for base in \
+    "/usr/local" \
+    "/usr" \
+    "${home}/.local"
+  do
+    remove_path "${base}/lib/${LIB_DIR_NAME}"
+    remove_path "${base}/share/applications/${APP_ID}.desktop"
+    remove_path "${base}/share/applications/${APP_NAME}.desktop"
+    for s in 32x32 128x128 256x256 256x256@2; do
+      remove_path "${base}/share/icons/hicolor/${s}/apps/${APP_ID}.png"
+    done
   done
+
   if [[ -f "$RULE_DST" ]]; then
     run_root rm -f "$RULE_DST"
     run_root udevadm control --reload-rules || true
@@ -226,30 +315,45 @@ do_uninstall() {
     log "Removed udev rule $RULE_DST"
   fi
   if command -v update-desktop-database >/dev/null 2>&1; then
-    update-desktop-database "$(prefix_share)/applications" 2>/dev/null || true
+    update-desktop-database "/usr/local/share/applications" 2>/dev/null || true
+    update-desktop-database "${home}/.local/share/applications" 2>/dev/null || true
   fi
   if command -v gtk-update-icon-cache >/dev/null 2>&1; then
-    gtk-update-icon-cache -f -t "$(prefix_share)/icons/hicolor" 2>/dev/null || true
+    gtk-update-icon-cache -f -t "/usr/local/share/icons/hicolor" 2>/dev/null || true
+    gtk-update-icon-cache -f -t "${home}/.local/share/icons/hicolor" 2>/dev/null || true
   fi
-  log "Uninstall complete. Config under ~/.config/magicpad-companion was left in place."
+  log "Uninstall complete. Config under ${home}/.config/magicpad-companion was left in place."
 }
 
 # ── Gesture daemon (user systemd) ───────────────────────────────────────────
 resolve_app_binary() {
+  # Prefer the *newest* installed binary so dual PATH installs never leave the
+  # daemon on a stale /usr/local while ~/.local (earlier on PATH) is newer.
   local candidates=(
     "$(prefix_bin)/${APP_ID}"
     "/usr/local/bin/${APP_ID}"
-    "${HOME}/.local/bin/${APP_ID}"
+    "$(target_home)/.local/bin/${APP_ID}"
     "/usr/bin/${APP_ID}"
-    "$ROOT/src-tauri/target/release/${APP_ID}"
   )
-  local c
+  local c best="" best_mtime=0 mtime
   for c in "${candidates[@]}"; do
     if [[ -x "$c" ]]; then
-      echo "$c"
-      return 0
+      mtime="$(stat -c %Y "$c" 2>/dev/null || echo 0)"
+      if [[ -z "$best" || "$mtime" -gt "$best_mtime" ]]; then
+        best="$c"
+        best_mtime="$mtime"
+      fi
     fi
   done
+  if [[ -n "$best" ]]; then
+    echo "$best"
+    return 0
+  fi
+  # Dev tree last (never preferred over an installed copy)
+  if [[ -x "$ROOT/src-tauri/target/release/${APP_ID}" ]]; then
+    echo "$ROOT/src-tauri/target/release/${APP_ID}"
+    return 0
+  fi
   if command -v "$APP_ID" >/dev/null 2>&1; then
     command -v "$APP_ID"
     return 0
@@ -257,19 +361,48 @@ resolve_app_binary() {
   return 1
 }
 
+# Copy the canonical (newest) binary to every other known install path that already exists.
+sync_installed_binaries() {
+  local src="${1:-}"
+  if [[ -z "$src" ]]; then
+    src="$(resolve_app_binary)" || return 1
+  fi
+  [[ -x "$src" ]] || return 1
+  local p synced=0 failed=0
+  while IFS= read -r p; do
+    [[ -n "$p" ]] || continue
+    if [[ "$p" != "$src" && -e "$p" ]]; then
+      if ! cmp -s "$src" "$p" 2>/dev/null; then
+        log "Syncing binary $p ← $src"
+        if install_file 755 "$src" "$p" 2>/dev/null; then
+          synced=$((synced + 1))
+        else
+          failed=$((failed + 1))
+          warn "Could not sync $p (need root?). Daemon will use: $src"
+        fi
+      fi
+    fi
+  done < <(all_known_bins | sort -u)
+  if [[ "$failed" -gt 0 ]]; then
+    warn "Stale copy left behind — re-run with sudo, or: sudo install -m755 '$src' /usr/local/bin/${APP_ID}"
+  fi
+}
+
 seed_default_gestures_json() {
-  local home cfg dir json
+  local home cfg json
   home="$(target_home)"
   cfg="${home}/.config/magicpad-companion"
-  dir="$cfg"
-  json="${dir}/gestures.json"
+  json="${cfg}/gestures.json"
   if [[ -f "$json" ]]; then
     log "Keeping existing gestures config: $json"
     return 0
   fi
-  mkdir -p "$dir"
-  # Matches GestureMap::default + pinch→zoom (v0.3.1+)
-  cat > "$json" <<'JSON'
+  as_user mkdir -p "$cfg"
+  # Matches app defaults: 3-tap screenshot, 4-tap unbound (set Custom e.g. flameshot),
+  # pinch zoom, 4-swipe browser back/forward (v0.3.1–0.3.3)
+  local tmp
+  tmp="$(mktemp)"
+  cat > "$tmp" <<'JSON'
 {
   "bindings": [
     { "trigger": "three_finger_swipe_left", "action": "prev_desktop", "custom": null, "available": true },
@@ -288,29 +421,39 @@ seed_default_gestures_json() {
   "backend": "libinput-daemon"
 }
 JSON
-  # Fix ownership if we wrote as root into the user's home
   if [[ "$(id -u)" -eq 0 ]]; then
-    local u
-    u="$(target_user)"
-    chown -R "$u:$u" "$cfg" 2>/dev/null || true
+    install -o "$(target_user)" -g "$(target_user)" -m 644 "$tmp" "$json"
+  else
+    install -m 644 "$tmp" "$json"
   fi
+  rm -f "$tmp"
   log "Seeded default gestures → $json"
 }
 
 install_gesture_daemon() {
   log "Configuring multi-finger gesture daemon…"
 
-  # Deps (may already be installed by install_deps)
+  # Deps (only if missing — avoids sudo password prompt when already installed)
   if [[ "$SKIP_DEPS" -eq 0 ]] && command -v pacman >/dev/null 2>&1; then
-    run_root pacman -S --needed --noconfirm libinput-tools wtype 2>/dev/null \
-      || warn "Could not install libinput-tools/wtype via pacman — install them manually."
+    local need_pkgs=()
+    command -v libinput >/dev/null 2>&1 || need_pkgs+=(libinput-tools)
+    command -v wtype >/dev/null 2>&1 || command -v xdotool >/dev/null 2>&1 || need_pkgs+=(wtype)
+    if [[ ${#need_pkgs[@]} -gt 0 ]]; then
+      run_root pacman -S --needed --noconfirm "${need_pkgs[@]}" 2>/dev/null \
+        || warn "Could not install ${need_pkgs[*]} via pacman — install them manually."
+    fi
   fi
 
-  local u home uid runtime wayland exe unit_dir unit autostart_dir
+  local u home uid runtime wayland exe unit_dir unit autostart_dir exec_line
   u="$(target_user)"
   home="$(target_home)"
   uid="$(target_uid)"
-  runtime="${XDG_RUNTIME_DIR:-/run/user/${uid}}"
+  # Prefer live session env when installing from an active graphical session
+  if [[ -n "${XDG_RUNTIME_DIR:-}" && -d "${XDG_RUNTIME_DIR}" ]]; then
+    runtime="$XDG_RUNTIME_DIR"
+  else
+    runtime="/run/user/${uid}"
+  fi
   wayland="${WAYLAND_DISPLAY:-wayland-0}"
 
   if ! exe="$(resolve_app_binary)"; then
@@ -318,6 +461,9 @@ install_gesture_daemon() {
     warn "  ./scripts/install-endeavouros.sh --gestures"
     return 1
   fi
+  # Prefer absolute path for systemd; keep dual installs identical
+  exe="$(readlink -f "$exe" 2>/dev/null || echo "$exe")"
+  sync_installed_binaries "$exe" || true
   log "Gesture daemon binary: $exe"
 
   if ! command -v libinput >/dev/null 2>&1; then
@@ -327,32 +473,20 @@ install_gesture_daemon() {
     warn "wtype missing (package: wtype). Daemon cannot inject keys yet."
   fi
 
-  # input group
-  if ! id -nG "$u" 2>/dev/null | tr ' ' '\n' | grep -qx input; then
-    log "Adding $u to the 'input' group (required to read trackpad events)…"
-    run_root usermod -aG input "$u"
-    warn "Log out and back in so 'input' group membership applies, then:"
-    warn "  systemctl --user restart ${GESTURES_UNIT}"
-  else
-    log "User $u is in the input group."
-  fi
-
+  ensure_input_group
   seed_default_gestures_json
 
   unit_dir="${home}/.config/systemd/user"
-  mkdir -p "$unit_dir"
+  as_user mkdir -p "$unit_dir"
   unit="${unit_dir}/${GESTURES_UNIT}"
 
   # Use `sg input` so the daemon can open /dev/input even when the user
   # systemd session was started before usermod -aG input (no full re-login).
-  local exec_line
-  if command -v sg >/dev/null 2>&1; then
-    exec_line="/usr/bin/sg input -c '${exe} --gestures'"
-  else
-    exec_line="${exe} --gestures"
-  fi
+  exec_line="$(sg_or_direct_exec "$exe" "--gestures")"
 
-  cat > "$unit" <<EOF
+  local tmpunit
+  tmpunit="$(mktemp)"
+  cat > "$tmpunit" <<EOF
 [Unit]
 Description=MagicPad Companion multi-finger gesture daemon
 Documentation=${REPO_URL}
@@ -372,27 +506,43 @@ Environment=XDG_RUNTIME_DIR=${runtime}
 WantedBy=graphical-session.target
 WantedBy=default.target
 EOF
+  if [[ "$(id -u)" -eq 0 ]]; then
+    install -o "$u" -g "$u" -m 644 "$tmpunit" "$unit"
+  else
+    install -m 644 "$tmpunit" "$unit"
+  fi
+  rm -f "$tmpunit"
 
   autostart_dir="${home}/.config/autostart"
-  mkdir -p "$autostart_dir"
-  cat > "${autostart_dir}/magicpad-gestures.desktop" <<EOF
+  as_user mkdir -p "$autostart_dir"
+  local tmpdesk exec_autostart
+  # Autostart also under sg input (same permission model as the unit)
+  exec_autostart="$(sg_or_direct_exec "$exe" "--gestures")"
+  tmpdesk="$(mktemp)"
+  cat > "$tmpdesk" <<EOF
 [Desktop Entry]
 Type=Application
 Name=MagicPad Gestures
 Comment=Multi-finger trackpad gestures for MagicPad Companion
-Exec=${exe} --gestures
+Exec=${exec_autostart}
 X-GNOME-Autostart-enabled=true
 Hidden=false
 NoDisplay=true
 EOF
-
   if [[ "$(id -u)" -eq 0 ]]; then
-    chown -R "$u:$u" "${home}/.config/systemd" "${home}/.config/autostart" \
-      "${home}/.config/magicpad-companion" 2>/dev/null || true
+    install -o "$u" -g "$u" -m 644 "$tmpdesk" "${autostart_dir}/magicpad-gestures.desktop"
+  else
+    install -m 644 "$tmpdesk" "${autostart_dir}/magicpad-gestures.desktop"
   fi
+  rm -f "$tmpdesk"
 
   log "Installed user unit → $unit"
+  log "  ExecStart=${exec_line}"
   log "Installed autostart → ${autostart_dir}/magicpad-gestures.desktop"
+
+  # Restart cleanly so an old binary / old unit without sg is replaced
+  as_user systemctl --user stop "$GESTURES_UNIT" 2>/dev/null || true
+  as_user pkill -f "${APP_ID} --gestures" 2>/dev/null || true
 
   # Enable + start under the user session when possible
   if as_user systemctl --user daemon-reload 2>/dev/null; then
@@ -412,7 +562,8 @@ EOF
   if as_user systemctl --user is-active --quiet "$GESTURES_UNIT" 2>/dev/null; then
     log "Status: gesture daemon is active"
   else
-    warn "Daemon not active yet — usually needs a re-login after joining 'input' group."
+    warn "Daemon not active yet. Try: systemctl --user restart ${GESTURES_UNIT}"
+    warn "If /dev/input is still denied: ensure getent group input lists $(target_user)"
   fi
 }
 
@@ -441,13 +592,8 @@ install_deps() {
   )
   run_root pacman -S --needed --noconfirm "${pkgs[@]}"
 
-  # Gesture daemon needs /dev/input access
-  local u="${SUDO_USER:-$USER}"
-  if [[ -n "$u" && "$u" != "root" ]] && ! id -nG "$u" 2>/dev/null | tr ' ' '\n' | grep -qx input; then
-    log "Adding $u to the 'input' group (required for trackpad gestures)…"
-    run_root usermod -aG input "$u"
-    warn "Log out and back in so the 'input' group membership applies."
-  fi
+  # Gesture daemon needs /dev/input access (account membership; sg handles session lag)
+  ensure_input_group
 
   if [[ "$WITH_REMAPPER" -eq 1 ]]; then
     log "Installing input-remapper…"
@@ -462,6 +608,8 @@ install_deps() {
 # ── Helpers (udev, remapper profile, unit) ──────────────────────────────────
 install_helpers() {
   local rule_src="$1"
+  local home
+  home="$(target_home)"
 
   [[ -f "$rule_src" ]] || die "udev rule missing: $rule_src"
   log "Installing udev rule → $RULE_DST"
@@ -470,36 +618,32 @@ install_helpers() {
   run_root udevadm trigger
   log "udev rules installed."
 
-  if ! id -nG "${SUDO_USER:-$USER}" 2>/dev/null | tr ' ' '\n' | grep -qx input \
-    && ! id -nG "$USER" | tr ' ' '\n' | grep -qx input; then
-    local u="${SUDO_USER:-$USER}"
-    warn "User '$u' is not in the 'input' group."
-    log "To add (then log out/in):  sudo usermod -aG input $u"
-    if [[ -t 0 ]]; then
-      read -r -p "Add $u to 'input' group now? [y/N] " ans || true
-      if [[ "${ans:-}" =~ ^[Yy]$ ]]; then
-        run_root usermod -aG input "$u"
-        log "Added. Log out and back in for group membership to apply."
-      fi
-    fi
-  else
-    log "User is already in the input group."
-  fi
+  ensure_input_group
 
   local profile_src="$PROFILE_SRC_TREE"
   if [[ -f "$profile_src" ]]; then
-    local dest_dir="${XDG_CONFIG_HOME:-$HOME/.config}/input-remapper-2/presets/Magic Trackpad"
-    mkdir -p "$dest_dir"
-    cp "$profile_src" "$dest_dir/MagicPad.json"
-    mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/magicpad-companion/input-remapper"
-    cp "$profile_src" "${XDG_CONFIG_HOME:-$HOME/.config}/magicpad-companion/input-remapper/MagicPad.json"
+    local dest_dir="${home}/.config/input-remapper-2/presets/Magic Trackpad"
+    local staged="${home}/.config/magicpad-companion/input-remapper"
+    as_user mkdir -p "$dest_dir" "$staged"
+    if [[ "$(id -u)" -eq 0 ]]; then
+      install -o "$(target_user)" -g "$(target_user)" -m 644 "$profile_src" "$dest_dir/MagicPad.json"
+      install -o "$(target_user)" -g "$(target_user)" -m 644 "$profile_src" "$staged/MagicPad.json"
+    else
+      install -m 644 "$profile_src" "$dest_dir/MagicPad.json"
+      install -m 644 "$profile_src" "$staged/MagicPad.json"
+    fi
     log "Staged input-remapper profile → $dest_dir/MagicPad.json"
   fi
 
   if [[ -f "$UNIT_SRC_TREE" ]]; then
-    local unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
-    mkdir -p "$unit_dir"
-    cp "$UNIT_SRC_TREE" "$unit_dir/magicpad-companion.service"
+    local unit_dir="${home}/.config/systemd/user"
+    as_user mkdir -p "$unit_dir"
+    if [[ "$(id -u)" -eq 0 ]]; then
+      install -o "$(target_user)" -g "$(target_user)" -m 644 "$UNIT_SRC_TREE" \
+        "$unit_dir/magicpad-companion.service"
+    else
+      install -m 644 "$UNIT_SRC_TREE" "$unit_dir/magicpad-companion.service"
+    fi
     log "Staged user unit → $unit_dir/magicpad-companion.service (disabled by default)"
   fi
 }
@@ -635,19 +779,8 @@ install_app_from_extract() {
   install_file 755 "$bin_src" "$bin_dst"
 
   # Keep other known install locations in sync so PATH/desktop don't keep an old copy.
-  # (Common failure: ~/.local/bin is earlier on PATH than /usr/local/bin.)
-  local other_bins=(
-    "${HOME}/.local/bin/${APP_ID}"
-    "/usr/local/bin/${APP_ID}"
-    "/usr/bin/${APP_ID}"
-  )
-  local ob
-  for ob in "${other_bins[@]}"; do
-    if [[ "$ob" != "$bin_dst" && -e "$ob" ]]; then
-      log "Updating existing binary at $ob"
-      install_file 755 "$bin_src" "$ob" || warn "Could not update $ob (permission?)"
-    fi
-  done
+  # (Common failure: ~/.local/bin is earlier on PATH than /usr/local/bin → stale 0.2.x UI.)
+  sync_installed_binaries "$bin_dst" || true
 
   if [[ -d "$lib_src" ]]; then
     log "Installing resources → $lib_dst"
@@ -704,8 +837,10 @@ install_app_from_extract() {
 
   # Ensure ~/.local/bin is on PATH hint
   if [[ "$USER_INSTALL" -eq 1 ]]; then
+    local lbin
+    lbin="$(target_home)/.local/bin"
     case ":$PATH:" in
-      *":$HOME/.local/bin:"*) ;;
+      *":${lbin}:"*) ;;
       *)
         warn "~/.local/bin is not on your PATH. Add to ~/.bashrc:"
         echo '  export PATH="$HOME/.local/bin:$PATH"'
@@ -713,7 +848,194 @@ install_app_from_extract() {
     esac
   fi
 
+  # Report which binary `command -v` will find (catches dual-install confusion)
+  if command -v "$APP_ID" >/dev/null 2>&1; then
+    local which_bin
+    which_bin="$(command -v "$APP_ID")"
+    log "PATH resolves ${APP_ID} → ${which_bin}"
+    if [[ "$which_bin" != "$bin_dst" && -x "$bin_dst" ]]; then
+      warn "PATH prefers ${which_bin} over the just-installed ${bin_dst}."
+      warn "Both should now be the same build (dual-path sync). Re-open shells if needed."
+    fi
+  fi
+
   log "App installed. Launch:  ${APP_ID}   or from the app menu."
+}
+
+# ── Post-install verify ─────────────────────────────────────────────────────
+do_verify() {
+  local u home issues=0
+  u="$(target_user)"
+  home="$(target_home)"
+
+  echo ""
+  log "MagicPad Companion — install checklist"
+  echo ""
+
+  # Binary
+  local bin=""
+  if bin="$(resolve_app_binary)"; then
+    ok "binary: $bin (canonical = newest)"
+    # Show all copies + mtimes; flag content mismatch
+    local p first="" mismatch=0
+    while IFS= read -r p; do
+      [[ -n "$p" && -e "$p" ]] || continue
+      printf '       also: %s (%s)\n' "$p" "$(stat -c '%y' "$p" 2>/dev/null | cut -d. -f1 || echo '?')"
+      if [[ -z "$first" ]]; then
+        first="$p"
+      elif ! cmp -s "$first" "$p" 2>/dev/null; then
+        mismatch=1
+      fi
+    done < <(all_known_bins | sort -u)
+    if [[ "$mismatch" -eq 1 ]]; then
+      fail "dual-install binaries differ — re-run install or: ./scripts/install-endeavouros.sh --gestures"
+      issues=$((issues + 1))
+    fi
+    if command -v "$APP_ID" >/dev/null 2>&1; then
+      ok "PATH → $(command -v "$APP_ID")"
+    else
+      fail "not on PATH — open a new shell or add install dir to PATH"
+      issues=$((issues + 1))
+    fi
+  else
+    fail "magicpad-companion binary not found"
+    issues=$((issues + 1))
+  fi
+
+  # Packages
+  if command -v libinput >/dev/null 2>&1; then
+    ok "libinput CLI (libinput-tools)"
+  else
+    fail "libinput missing — sudo pacman -S libinput-tools"
+    issues=$((issues + 1))
+  fi
+  if command -v wtype >/dev/null 2>&1; then
+    ok "wtype (key injection)"
+  elif command -v xdotool >/dev/null 2>&1; then
+    ok "xdotool (fallback key injection)"
+  else
+    fail "wtype missing — sudo pacman -S wtype"
+    issues=$((issues + 1))
+  fi
+  if command -v sg >/dev/null 2>&1; then
+    ok "sg (shadow-utils) — daemon runs under input group without re-login"
+  else
+    fail "sg missing — install shadow package"
+    issues=$((issues + 1))
+  fi
+
+  # input group (account DB, not session)
+  if account_in_input_group "$u"; then
+    ok "user $u in input group (getent/id account)"
+    if ! id -nG 2>/dev/null | tr ' ' '\n' | grep -qx input; then
+      printf '       note: this shell session lacks input; daemon uses sg input so OK\n'
+    fi
+  else
+    fail "user $u not in input group — sudo usermod -aG input $u"
+    issues=$((issues + 1))
+  fi
+
+  # udev
+  if [[ -f "$RULE_DST" ]]; then
+    ok "udev rule $RULE_DST"
+  else
+    fail "udev rule missing — re-run installer or --helpers"
+    issues=$((issues + 1))
+  fi
+
+  # gestures config
+  if [[ -f "${home}/.config/magicpad-companion/gestures.json" ]]; then
+    ok "gestures.json present"
+  else
+    fail "gestures.json missing — will be seeded by --gestures"
+    issues=$((issues + 1))
+  fi
+
+  # unit + ExecStart has sg
+  local unit="${home}/.config/systemd/user/${GESTURES_UNIT}"
+  if [[ -f "$unit" ]]; then
+    ok "systemd user unit $unit"
+    if grep -q 'sg input' "$unit"; then
+      ok "unit uses sg input (session-group lag safe)"
+    else
+      fail "unit missing sg input — re-run: ./scripts/install-endeavouros.sh --gestures"
+      issues=$((issues + 1))
+    fi
+    if grep -q -- '--gestures' "$unit"; then
+      ok "unit ExecStart runs --gestures"
+    fi
+  else
+    fail "gesture unit missing — ./scripts/install-endeavouros.sh --gestures"
+    issues=$((issues + 1))
+  fi
+
+  # autostart
+  local auto="${home}/.config/autostart/magicpad-gestures.desktop"
+  if [[ -f "$auto" ]]; then
+    ok "XDG autostart entry"
+    if grep -q 'sg input' "$auto"; then
+      ok "autostart uses sg input"
+    else
+      fail "autostart without sg input — re-run --gestures"
+      issues=$((issues + 1))
+    fi
+  else
+    fail "autostart missing (optional backup)"
+    issues=$((issues + 1))
+  fi
+
+  # daemon running
+  if as_user systemctl --user is-active --quiet "$GESTURES_UNIT" 2>/dev/null; then
+    ok "gesture daemon active (${GESTURES_UNIT})"
+  else
+    fail "gesture daemon not active — systemctl --user status ${GESTURES_UNIT}"
+    issues=$((issues + 1))
+  fi
+
+  # trackpad present (best-effort)
+  if command -v libinput >/dev/null 2>&1; then
+    if libinput list-devices 2>/dev/null | grep -qi trackpad; then
+      ok "libinput sees a trackpad"
+    else
+      printf '  [--] no trackpad in libinput list-devices (replug / re-pair BT?)\n'
+    fi
+  fi
+
+  echo ""
+  if [[ "$issues" -eq 0 ]]; then
+    log "All checks passed."
+  else
+    warn "${issues} issue(s) found — re-run full install or --gestures / --helpers as needed."
+  fi
+  echo ""
+  echo "  Quick fixes:"
+  echo "    ./scripts/install-endeavouros.sh --local     # rebuild+install from tree"
+  echo "    ./scripts/install-endeavouros.sh --gestures  # repair daemon unit"
+  echo "    systemctl --user restart ${GESTURES_UNIT}"
+  echo "    journalctl --user -u ${GESTURES_UNIT} -f"
+  echo ""
+  return "$issues"
+}
+
+print_next_steps() {
+  echo ""
+  log "Install complete."
+  echo ""
+  echo "  Next steps:"
+  echo "    1. Replug the Magic Trackpad (or re-pair Bluetooth)"
+  echo "    2. Start the app:  ${APP_ID}"
+  echo "    3. Gestures: systemctl --user status ${GESTURES_UNIT}"
+  echo "    4. Verify:   ./scripts/install-endeavouros.sh --verify"
+  echo ""
+  echo "  Defaults (Budgie/labwc):"
+  echo "    3-finger swipe L/R  → workspaces"
+  echo "    3-finger tap        → Budgie Screenshot"
+  echo "    4-finger swipe L/R  → browser back/forward"
+  echo "    4-finger tap        → unbound (set Custom, e.g. flameshot gui)"
+  echo "    pinch in/out        → zoom (Ctrl+-/Ctrl+=)"
+  echo ""
+  echo "  Docs: ${REPO_URL}/blob/main/docs/linux-install.md"
+  echo ""
 }
 
 # ── Main ────────────────────────────────────────────────────────────────────
@@ -728,8 +1050,15 @@ main() {
     return
   fi
 
+  if [[ "$MODE" == "verify" ]]; then
+    # Exit non-zero when checklist finds issues (CI / scripting)
+    do_verify
+    return
+  fi
+
   if [[ "$MODE" == "gestures" ]]; then
     install_gesture_daemon || true
+    do_verify || true
     log "Done (gesture daemon). Check: systemctl --user status ${GESTURES_UNIT}"
     return
   fi
@@ -741,6 +1070,7 @@ main() {
     if [[ "$INSTALL_GESTURES" -eq 1 ]]; then
       install_gesture_daemon || true
     fi
+    do_verify || true
     log "Done (helpers). Replug the trackpad, then open MagicPad Companion."
     return
   fi
@@ -773,18 +1103,8 @@ main() {
     log "Skipped gesture daemon (--no-gestures)."
   fi
 
-  echo ""
-  log "Install complete."
-  echo ""
-  echo "  Next steps:"
-  echo "    1. Log out/in if you were just added to the 'input' group"
-  echo "    2. Replug the Magic Trackpad (or re-pair Bluetooth)"
-  echo "    3. Start the app:  ${APP_ID}"
-  echo "    4. Gestures: systemctl --user status ${GESTURES_UNIT}"
-  echo "       (3-finger swipe L/R = workspaces; pinch = zoom)"
-  echo ""
-  echo "  Docs: ${REPO_URL}/blob/main/docs/linux-install.md"
-  echo ""
+  print_next_steps
+  do_verify || true
 }
 
 main
