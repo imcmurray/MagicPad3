@@ -71,6 +71,19 @@
     applyTheme(next);
   }
 
+  function formatErr(e: unknown): string {
+    const s = e instanceof Error ? e.message : String(e);
+    // Tauri/WebKit sometimes surfaces IPC as a localhost fetch failure
+    if (/localhost|1420|Failed to fetch|NetworkError|Load failed/i.test(s)) {
+      return (
+        "App backend communication failed. Quit MagicPad completely and relaunch " +
+        "from the menu (not `npm run tauri dev`). If it persists, reinstall with " +
+        "./scripts/install-endeavouros.sh --local"
+      );
+    }
+    return s;
+  }
+
   async function loadAll() {
     loading = true;
     error = null;
@@ -84,7 +97,7 @@
       version = await api.version();
       logs = await api.getLogs();
     } catch (e) {
-      error = String(e);
+      error = formatErr(e);
     } finally {
       loading = false;
     }
@@ -95,8 +108,9 @@
     try {
       devices = await api.refreshDevices();
       logs = await api.getLogs();
+      error = null;
     } catch (e) {
-      error = String(e);
+      error = formatErr(e);
     } finally {
       loading = false;
     }
@@ -109,7 +123,7 @@
       await api.setSettings(settings);
       logs = await api.getLogs();
     } catch (e) {
-      error = String(e);
+      error = formatErr(e);
     } finally {
       busy = false;
     }
@@ -119,8 +133,9 @@
     busy = true;
     try {
       settings = await api.resetSettings();
+      error = null;
     } catch (e) {
-      error = String(e);
+      error = formatErr(e);
     } finally {
       busy = false;
     }
@@ -131,8 +146,9 @@
     try {
       await api.setGestures(gestures);
       logs = await api.getLogs();
+      error = null;
     } catch (e) {
-      error = String(e);
+      error = formatErr(e);
     } finally {
       busy = false;
     }
