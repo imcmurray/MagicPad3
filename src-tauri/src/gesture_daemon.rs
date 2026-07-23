@@ -288,17 +288,37 @@ fn parse_event(line: &str) -> Option<Parsed> {
 }
 
 fn extract_fingers(line: &str) -> Option<u8> {
-    // After the timestamp field, first integer 2–5 is finger count
+    // libinput formats:
+    //   GESTURE_SWIPE_BEGIN   +1.23s  4
+    //   GESTURE_SWIPE_UPDATE  N  +1.24s  4  12.5/-0.3 (...)
+    //   GESTURE_SWIPE_END     +1.40s  4
+    // The integer immediately BEFORE a +seconds timestamp is a frame index,
+    // NOT finger count. Finger count is the first 2–5 integer AFTER +…s.
     let parts: Vec<&str> = line.split_whitespace().collect();
-    for (i, p) in parts.iter().enumerate() {
-        if p.contains("GESTURE_") {
-            // look ahead for a bare digit
-            for q in parts.iter().skip(i + 1).take(4) {
+    let gest_idx = parts.iter().position(|p| p.contains("GESTURE_"))?;
+
+    // Prefer number after a +time token
+    for (i, p) in parts.iter().enumerate().skip(gest_idx + 1) {
+        if p.starts_with('+') && p.contains('s') {
+            if let Some(q) = parts.get(i + 1) {
                 if let Ok(n) = q.parse::<u8>() {
                     if (2..=5).contains(&n) {
                         return Some(n);
                     }
                 }
+            }
+        }
+    }
+
+    // BEGIN/END often: GESTURE_* +time fingers  (no frame index)
+    // Fallback: last 2–5 integer on the line before any dx/dy token
+    for q in parts.iter().skip(gest_idx + 1).rev() {
+        if q.contains('/') {
+            continue;
+        }
+        if let Ok(n) = q.parse::<u8>() {
+            if (2..=5).contains(&n) {
+                return Some(n);
             }
         }
     }
@@ -495,6 +515,16 @@ fn execute_action(binding: &GestureBinding) {
         }
     }
 
+    // Browser history: Alt+Left is flaky in Wayland browsers — try several methods
+    if matches!(
+        binding.action,
+        GestureAction::BrowserBack | GestureAction::BrowserForward
+    ) {
+        if inject_browser_nav(binding.action == GestureAction::BrowserBack) {
+            return;
+        }
+    }
+
     // Prefer spawning apps (screenshot tool) before key injection
     if let Some(cmd) = action_to_command(binding.action) {
         match Command::new("sh").args(["-c", cmd]).status() {
@@ -508,6 +538,68 @@ fn execute_action(binding: &GestureBinding) {
     if let Some(keys) = action_to_keys(binding.action) {
         inject_keys(&keys);
     }
+}
+
+/// Navigate browser history with multiple fallbacks.
+fn inject_browser_nav(back: bool) -> bool {
+    let xf86 = if back { "XF86Back" } else { "XF86Forward" };
+    let arrow = if back { "Left" } else { "Right" };
+    let mouse_btn = if back { "8" } else { "9" }; // BTN_SIDE / BTN_EXTRA
+
+    // 1) Dedicated browser keys
+    if inject_keys_ok(&KeyChord {
+        mods: vec![],
+        key: xf86.into(),
+    }) {
+        log::info!("browser nav via {xf86}");
+        return true;
+    }
+
+    // 2) Classic Alt+Arrow
+    if inject_keys_ok(&KeyChord {
+        mods: vec!["alt"],
+        key: arrow.into(),
+    }) {
+        log::info!("browser nav via Alt+{arrow}");
+        return true;
+    }
+
+    // 3) Mouse back/forward buttons (most reliable in Firefox/Chromium)
+    if which("ydotool") {
+        if Command::new("ydotool")
+            .args(["click", mouse_btn])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+        {
+            log::info!("browser nav via ydotool click {mouse_btn}");
+            return true;
+        }
+    }
+    if which("xdotool") {
+        if Command::new("xdotool")
+            .args(["click", mouse_btn])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+        {
+            log::info!("browser nav via xdotool click {mouse_btn}");
+            return true;
+        }
+    }
+
+    // 4) Ctrl+[ / Ctrl+]
+    let bracket = if back { "bracketleft" } else { "bracketright" };
+    if inject_keys_ok(&KeyChord {
+        mods: vec!["ctrl"],
+        key: bracket.into(),
+    }) {
+        log::info!("browser nav via Ctrl+{bracket}");
+        return true;
+    }
+
+    log::warn!("browser nav failed (back={back})");
+    false
 }
 
 /// Wayland/X11 key chords matching Budgie+labwc defaults.
@@ -606,6 +698,10 @@ impl KeyChord {
 }
 
 fn inject_keys(chord: &KeyChord) {
+    let _ = inject_keys_ok(chord);
+}
+
+fn inject_keys_ok(chord: &KeyChord) -> bool {
     if which("wtype") {
         let mut cmd = Command::new("wtype");
         for m in &chord.mods {
@@ -615,15 +711,20 @@ fn inject_keys(chord: &KeyChord) {
         for m in chord.mods.iter().rev() {
             cmd.args(["-m", m]);
         }
-        match cmd.status() {
-            Ok(s) if s.success() => return,
-            Ok(s) => log::warn!("wtype exited {:?}", s.code()),
-            Err(e) => log::warn!("wtype failed: {e}"),
+        match cmd.output() {
+            Ok(o) if o.status.success() => return true,
+            Ok(o) => {
+                log::debug!(
+                    "wtype {:?} failed: {}",
+                    chord,
+                    String::from_utf8_lossy(&o.stderr)
+                );
+            }
+            Err(e) => log::debug!("wtype failed: {e}"),
         }
     }
 
     if which("xdotool") {
-        let mut args = vec!["key".to_string()];
         let mut combo = String::new();
         for m in &chord.mods {
             let xm = match *m {
@@ -641,10 +742,19 @@ fn inject_keys(chord: &KeyChord) {
         if !combo.is_empty() {
             combo.push('+');
         }
-        combo.push_str(&chord.key);
-        args.push(combo);
-        let _ = Command::new("xdotool").args(&args).status();
+        combo.push_str(&chord.key.to_ascii_lowercase());
+        // xdotool often wants lowercase key names
+        let combo_alt = combo.replace("Left", "Left").replace("Right", "Right");
+        if Command::new("xdotool")
+            .args(["key", &combo_alt])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+        {
+            return true;
+        }
     }
+    false
 }
 
 fn which(bin: &str) -> bool {
@@ -970,5 +1080,17 @@ mod tests {
             Some(Parsed::SwipeBegin { fingers }) => assert_eq!(fingers, 3),
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn fingers_after_timestamp_not_frame_index() {
+        let line = "event8   GESTURE_SWIPE_UPDATE      3  +246.977s        4 61.62/-1.35 (35.60/-0.78 unaccelerated)";
+        assert_eq!(extract_fingers(line), Some(4));
+    }
+
+    #[test]
+    fn fingers_on_end_line() {
+        let line = "event8   GESTURE_SWIPE_END            +247.198s        4";
+        assert_eq!(extract_fingers(line), Some(4));
     }
 }
