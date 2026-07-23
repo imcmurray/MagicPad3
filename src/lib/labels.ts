@@ -58,6 +58,8 @@ export function actionLabel(a: GestureAction): string {
     volume_up: "Volume up",
     volume_down: "Volume down",
     media_play_pause: "Play / Pause",
+    zoom_in: "Zoom in (Ctrl+=)",
+    zoom_out: "Zoom out (Ctrl+-)",
     custom: "Custom",
   };
   return map[a] ?? a;
@@ -77,6 +79,8 @@ export const ALL_ACTIONS: GestureAction[] = [
   "volume_up",
   "volume_down",
   "media_play_pause",
+  "zoom_in",
+  "zoom_out",
   "custom",
 ];
 

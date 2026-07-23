@@ -382,13 +382,15 @@ fn maybe_fire_swipe(
 }
 
 fn maybe_fire_pinch(map: &GestureMap, scale: f64, last_fire: &mut Instant) {
-    if last_fire.elapsed() < Duration::from_millis(400) {
+    // Slightly longer debounce so continuous pinch doesn't spam zoom steps
+    if last_fire.elapsed() < Duration::from_millis(280) {
         return;
     }
-    let trigger = if scale < 0.92 {
-        GestureTrigger::PinchIn
-    } else if scale > 1.08 {
-        GestureTrigger::PinchOut
+    // scale is absolute from gesture start (1.0 = no change)
+    let trigger = if scale < 0.94 {
+        GestureTrigger::PinchIn // fingers together → zoom out (map view away)
+    } else if scale > 1.06 {
+        GestureTrigger::PinchOut // fingers apart → zoom in
     } else {
         return;
     };
@@ -468,6 +470,15 @@ fn action_to_keys(action: GestureAction) -> Option<KeyChord> {
         MediaPlayPause => Some(KeyChord {
             mods: vec![],
             key: "XF86AudioPlay".into(),
+        }),
+        // Browsers, Electron apps, many viewers: Ctrl+= / Ctrl+-
+        ZoomIn => Some(KeyChord {
+            mods: vec!["ctrl"],
+            key: "equal".into(),
+        }),
+        ZoomOut => Some(KeyChord {
+            mods: vec!["ctrl"],
+            key: "minus".into(),
         }),
         GestureAction::None | Custom => Option::None,
     }

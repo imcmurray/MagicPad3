@@ -68,6 +68,8 @@ export type GestureAction =
   | "volume_up"
   | "volume_down"
   | "media_play_pause"
+  | "zoom_in"
+  | "zoom_out"
   | "custom";
 
 export interface GestureBinding {

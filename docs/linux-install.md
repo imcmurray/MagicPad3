@@ -152,6 +152,11 @@ systemctl --user status magicpad-gestures.service
 | 3-finger swipe down | Alt+Tab | Alt+Tab |
 | 4-finger swipe up | Show desktop | Super+D |
 | 4-finger swipe down | Raven panel | Super+A |
+| Pinch out | Zoom in | Ctrl+= |
+| Pinch in | Zoom out | Ctrl+- |
+
+Pinch zoom works in Firefox, Chromium, many Electron apps, LibreOffice, etc.
+Focus the window you want to zoom first.
 
 ### Manual test
 

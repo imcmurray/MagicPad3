@@ -127,6 +127,10 @@ pub enum GestureAction {
     VolumeUp,
     VolumeDown,
     MediaPlayPause,
+    /// Ctrl+=  — browser / document zoom in
+    ZoomIn,
+    /// Ctrl+-  — browser / document zoom out
+    ZoomOut,
     Custom,
 }
 
@@ -162,8 +166,8 @@ impl Default for GestureMap {
             (T::FourFingerSwipeUp, A::DesktopShow),
             (T::FourFingerSwipeDown, A::NotificationCenter),
             (T::FourFingerTap, A::None),
-            (T::PinchIn, A::None),
-            (T::PinchOut, A::None),
+            (T::PinchIn, A::ZoomOut),
+            (T::PinchOut, A::ZoomIn),
         ];
         Self {
             bindings: defaults

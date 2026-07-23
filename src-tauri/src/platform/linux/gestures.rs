@@ -15,6 +15,18 @@ pub fn load(config_dir: &Path) -> AppResult<GestureMap> {
     }
     let mut map: GestureMap = serde_json::from_str(&std::fs::read_to_string(path)?)?;
     map.backend = detect_backend();
+    // Upgrade older configs that left pinch unbound
+    for b in &mut map.bindings {
+        match b.trigger {
+            GestureTrigger::PinchIn if b.action == GestureAction::None => {
+                b.action = GestureAction::ZoomOut;
+            }
+            GestureTrigger::PinchOut if b.action == GestureAction::None => {
+                b.action = GestureAction::ZoomIn;
+            }
+            _ => {}
+        }
+    }
     Ok(map)
 }
 
@@ -158,6 +170,8 @@ fn action_name(a: GestureAction) -> &'static str {
         VolumeUp => "volume_up",
         VolumeDown => "volume_down",
         MediaPlayPause => "play_pause",
+        ZoomIn => "zoom_in",
+        ZoomOut => "zoom_out",
         Custom => "custom",
     }
 }

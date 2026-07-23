@@ -45,7 +45,7 @@ pub fn status() -> AppResult<DriverStatus> {
     Ok(DriverStatus {
         state,
         name: "MagicPad Linux helpers (udev + remapper)".into(),
-        version: Some("0.3.0".into()),
+        version: Some("0.3.1".into()),
         detail: detail.join(" · "),
         can_install: true,
         can_uninstall: udev_installed,
