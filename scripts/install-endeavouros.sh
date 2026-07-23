@@ -343,6 +343,15 @@ install_gesture_daemon() {
   mkdir -p "$unit_dir"
   unit="${unit_dir}/${GESTURES_UNIT}"
 
+  # Use `sg input` so the daemon can open /dev/input even when the user
+  # systemd session was started before usermod -aG input (no full re-login).
+  local exec_line
+  if command -v sg >/dev/null 2>&1; then
+    exec_line="/usr/bin/sg input -c '${exe} --gestures'"
+  else
+    exec_line="${exe} --gestures"
+  fi
+
   cat > "$unit" <<EOF
 [Unit]
 Description=MagicPad Companion multi-finger gesture daemon
@@ -352,7 +361,7 @@ After=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=${exe} --gestures
+ExecStart=${exec_line}
 Restart=on-failure
 RestartSec=2
 Environment=RUST_LOG=info

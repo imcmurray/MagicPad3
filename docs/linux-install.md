@@ -144,7 +144,10 @@ The EndeavourOS installer (`./scripts/install-endeavouros.sh`) by default:
 ./scripts/install-endeavouros.sh --gestures
 ```
 
-**Log out and back in** once if you were just added to `input`.
+If you were just added to `input`, either **log out and back in**, or re-run
+`./scripts/install-endeavouros.sh --gestures` — the service uses `sg input` so
+a full re-login is usually not required after the group membership exists in
+`/etc/group`.
 
 ### Enable / repair from the app
 

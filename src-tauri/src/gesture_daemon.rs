@@ -39,6 +39,7 @@ pub fn run() -> i32 {
         );
         return 1;
     }
+    log_device_access();
 
     let mut last_load = Instant::now() - Duration::from_secs(60);
     let mut map = load_map(&config_dir);
@@ -122,6 +123,11 @@ fn run_libinput_session(map: &GestureMap) -> Result<(), String> {
         let line = line.trim();
         if line.is_empty() {
             continue;
+        }
+
+        // Help diagnose devices that emit gestures under unexpected names
+        if line.to_ascii_uppercase().contains("GESTURE_") {
+            log::debug!("libinput: {line}");
         }
 
         if let Some(ev) = parse_event(line) {
@@ -369,8 +375,10 @@ fn maybe_fire_swipe(
     dy: f64,
     last_fire: &mut Instant,
 ) {
-    const THRESH: f64 = 8.0;
+    // libinput units are often small; keep this modest so short swipes still fire
+    const THRESH: f64 = 3.0;
     if dx.abs() < THRESH && dy.abs() < THRESH {
+        log::debug!("swipe ignored (below threshold) fingers={fingers} dx={dx:.2} dy={dy:.2}");
         return;
     }
     if last_fire.elapsed() < Duration::from_millis(350) {
@@ -662,7 +670,8 @@ pub use crate::models::GestureDaemonStatus;
 pub fn daemon_status() -> GestureDaemonStatus {
     let libinput_ok = which("libinput");
     let wtype_ok = which("wtype") || which("xdotool");
-    let input_group = user_in_input_group();
+    let input_group = user_in_input_group() || user_in_input_group_passwd();
+    let can_read = can_read_trackpad_events();
     let unit_installed = unit_path().map(|p| p.exists()).unwrap_or(false);
     let running = unit_is_active();
 
@@ -674,14 +683,20 @@ pub fn daemon_status() -> GestureDaemonStatus {
         parts.push("install wtype");
     }
     if !input_group {
-        parts.push("add user to 'input' group and re-login");
+        parts.push("sudo usermod -aG input $USER  (then re-login, or re-run install --gestures)");
+    } else if !can_read {
+        parts.push(
+            "session cannot open /dev/input yet — restart magicpad-gestures (uses sg input) or re-login",
+        );
     }
-    if libinput_ok && wtype_ok && input_group && !running {
+    if libinput_ok && wtype_ok && input_group && can_read && !running {
         parts.push("click Save gestures to start the daemon");
     }
 
-    let message = if running {
+    let message = if running && can_read {
         "Gesture daemon is running".into()
+    } else if running && !can_read {
+        "Daemon process is up but cannot read the trackpad (input permissions). Restart the service after joining the input group.".into()
     } else if parts.is_empty() {
         "Ready — save gestures to start the daemon".into()
     } else {
@@ -714,10 +729,12 @@ pub fn ensure_daemon_running() -> Result<String, String> {
         if !which("wtype") && !which("xdotool") {
             return Err("wtype missing. Run: sudo pacman -S wtype".into());
         }
-        if !user_in_input_group() {
+        if !user_in_input_group() && !user_in_input_group_passwd() {
             return Err(
                 "Your user is not in the 'input' group (needed to read trackpad events). \
-                 Run:  sudo usermod -aG input $USER   then log out and back in."
+                 Run:  sudo usermod -aG input $USER   then: \
+                 systemctl --user restart magicpad-gestures.service \
+                 (or log out and back in)."
                     .into(),
             );
         }
@@ -757,6 +774,13 @@ fn install_user_unit() -> Result<(), String> {
     let wayland = std::env::var("WAYLAND_DISPLAY").unwrap_or_else(|_| "wayland-0".into());
     let xdg = std::env::var("XDG_RUNTIME_DIR")
         .unwrap_or_else(|_| format!("/run/user/{uid}"));
+    // `sg input` applies the input group even when the user systemd session was
+    // started before `usermod -aG input` (no full re-login required).
+    let exec = if which("sg") {
+        format!("/usr/bin/sg input -c '{exe} --gestures'")
+    } else {
+        format!("{exe} --gestures")
+    };
     let body = format!(
         r#"[Unit]
 Description=MagicPad Companion multi-finger gesture daemon
@@ -766,7 +790,7 @@ After=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart={exe} --gestures
+ExecStart={exec}
 Restart=on-failure
 RestartSec=2
 Environment=RUST_LOG=info
@@ -780,6 +804,18 @@ WantedBy=default.target
     );
     std::fs::write(&unit, body).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Quick self-check used at daemon start.
+fn log_device_access() {
+    if can_read_trackpad_events() {
+        log::info!("trackpad event devices are readable (input group / sg ok)");
+    } else {
+        log::error!(
+            "cannot open /dev/input event devices — gestures will not work. \
+             Fix: sudo usermod -aG input $USER && systemctl --user restart magicpad-gestures.service"
+        );
+    }
 }
 
 fn install_autostart() -> Result<(), String> {
@@ -830,6 +866,7 @@ fn unit_is_active() -> bool {
 }
 
 fn user_in_input_group() -> bool {
+    // Current process credentials (session groups)
     Command::new("id")
         .arg("-nG")
         .output()
@@ -837,6 +874,64 @@ fn user_in_input_group() -> bool {
         .and_then(|o| String::from_utf8(o.stdout).ok())
         .map(|s| s.split_whitespace().any(|g| g == "input"))
         .unwrap_or(false)
+}
+
+/// True if /etc/group lists the user in `input` (even before re-login).
+fn user_in_input_group_passwd() -> bool {
+    let user = std::env::var("USER")
+        .or_else(|_| std::env::var("LOGNAME"))
+        .unwrap_or_default();
+    if user.is_empty() {
+        return false;
+    }
+    std::fs::read_to_string("/etc/group")
+        .ok()
+        .map(|g| {
+            g.lines().any(|line| {
+                let mut parts = line.split(':');
+                let name = parts.next().unwrap_or("");
+                let members = parts.nth(2).unwrap_or(""); // skip passwd, gid
+                name == "input" && members.split(',').any(|m| m == user)
+            })
+        })
+        .unwrap_or(false)
+}
+
+fn can_read_trackpad_events() -> bool {
+    // Prefer probing via `sg input` if available (matches service wrapper)
+    if which("sg") {
+        let status = Command::new("sg")
+            .args([
+                "input",
+                "-c",
+                "python3 -c \"import glob; import sys;\n\
+ok=False\n\
+for p in glob.glob('/dev/input/event*'):\n\
+  try:\n\
+    open(p,'rb').close(); ok=True; break\n\
+  except Exception:\n\
+    pass\n\
+sys.exit(0 if ok else 1)\"",
+            ])
+            .status();
+        if let Ok(s) = status {
+            return s.success();
+        }
+    }
+    // Direct probe
+    if let Ok(rd) = std::fs::read_dir("/dev/input") {
+        for ent in rd.flatten() {
+            let name = ent.file_name();
+            let n = name.to_string_lossy();
+            if !n.starts_with("event") {
+                continue;
+            }
+            if std::fs::File::open(ent.path()).is_ok() {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn users_uid() -> u32 {
