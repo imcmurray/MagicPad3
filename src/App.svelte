@@ -271,7 +271,20 @@
         Theme: {theme}
       </button>
       <div class="foot-meta muted mono">
-        <span>v{version}</span>
+        <button
+          class="linkish"
+          title="What's new in this version"
+          onclick={() => openUrl(whatsNewUrl(version))}
+        >
+          v{version}
+        </button>
+        <button
+          class="linkish"
+          title="GitHub release"
+          onclick={() => openUrl(releaseUrl(version))}
+        >
+          Release
+        </button>
         <button
           class="linkish"
           title="Open project on GitHub"
