@@ -1,0 +1,16 @@
+[Unit]
+Description=MagicPad Companion multi-finger gesture daemon
+Documentation=https://github.com/imcmurray/MagicPad3
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+# Installed path may be /usr/local/bin or ~/.local/bin — the app rewrites this.
+ExecStart=magicpad-companion --gestures
+Restart=on-failure
+RestartSec=2
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=graphical-session.target

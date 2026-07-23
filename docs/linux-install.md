@@ -112,7 +112,58 @@ sudo usermod -aG input "$USER"
 # re-login
 ```
 
-## input-remapper (optional advanced gestures)
+## Multi-finger gestures (Budgie / labwc)
+
+Windows uses the Precision driver for gestures. On Linux, **labwc does not
+bind 3/4-finger swipes natively**, so MagicPad runs a small user daemon:
+
+```
+libinput debug-events  →  detect swipes  →  wtype (Super+Page Up/Down, …)
+```
+
+### One-time setup
+
+```bash
+sudo pacman -S --needed libinput-tools wtype
+sudo usermod -aG input "$USER"
+# log out and back in
+```
+
+The EndeavourOS installer installs these packages and adds the `input` group.
+
+### Enable from the app
+
+1. Open **Gestures**
+2. Confirm daemon checklist (libinput-tools / wtype / input group)
+3. Click **Save gestures** (or **Start daemon**)
+
+This writes `~/.config/magicpad-companion/gestures.json` and enables:
+
+```bash
+systemctl --user status magicpad-gestures.service
+```
+
+### Default Budgie/labwc mappings
+
+| Gesture | Action | Shortcut injected |
+|---------|--------|-------------------|
+| 3-finger swipe L/R | Prev/Next desktop | Super+Page Up/Down |
+| 3-finger swipe up | App switcher | Super+Tab |
+| 3-finger swipe down | Alt+Tab | Alt+Tab |
+| 4-finger swipe up | Show desktop | Super+D |
+| 4-finger swipe down | Raven panel | Super+A |
+
+### Manual test
+
+```bash
+# should print GESTURE_SWIPE_* when you 3-finger swipe
+libinput debug-events
+# inject a workspace switch
+wtype -M logo -k Prior -m logo
+magicpad-companion --gestures   # foreground daemon
+```
+
+## input-remapper (optional advanced)
 
 ```bash
 sudo pacman -S input-remapper   # or AUR

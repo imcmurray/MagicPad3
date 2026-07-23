@@ -125,5 +125,15 @@ export interface AppSnapshot {
   driver: DriverStatus;
 }
 
+export interface GestureDaemonStatus {
+  available: boolean;
+  running: boolean;
+  libinputOk: boolean;
+  wtypeOk: boolean;
+  inputGroup: boolean;
+  unitInstalled: boolean;
+  message: string;
+}
+
 export type ThemeMode = "system" | "light" | "dark";
 export type NavId = "status" | "settings" | "gestures" | "driver" | "logs" | "help";

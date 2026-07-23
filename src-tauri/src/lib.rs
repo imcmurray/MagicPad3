@@ -3,6 +3,8 @@
 mod commands;
 mod device_group;
 mod error;
+#[cfg(target_os = "linux")]
+pub mod gesture_daemon;
 mod models;
 mod platform;
 mod state;
@@ -50,6 +52,8 @@ pub fn run() {
             commands::settings::reset_settings,
             commands::gestures::get_gestures,
             commands::gestures::set_gestures,
+            commands::gestures::get_gesture_daemon_status,
+            commands::gestures::start_gesture_daemon,
             commands::driver::get_driver_status,
             commands::driver::install_driver,
             commands::driver::uninstall_driver,

@@ -1,6 +1,6 @@
 [package]
 name = "magicpad-companion"
-version = "0.2.2"
+version = "0.3.0"
 description = "MagicPad Companion — Apple Magic Trackpad companion for Windows 11 and Linux"
 authors = ["MagicPad Companion Contributors"]
 edition = "2021"
@@ -28,6 +28,7 @@ chrono = { version = "0.4", features = ["serde"] }
 dirs = "6"
 parking_lot = "0.12"
 uuid = { version = "1", features = ["v4", "serde"] }
+ctrlc = "3"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61", features = [

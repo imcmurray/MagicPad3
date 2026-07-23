@@ -4,6 +4,7 @@ import type {
   DeviceInfo,
   DriverActionResult,
   DriverStatus,
+  GestureDaemonStatus,
   GestureMap,
   LogEntry,
   PlatformInfo,
@@ -23,6 +24,9 @@ export const api = {
   getGestures: () => invoke<GestureMap>("get_gestures"),
   setGestures: (gestures: GestureMap) =>
     invoke<void>("set_gestures", { gestures }),
+  gestureDaemonStatus: () =>
+    invoke<GestureDaemonStatus>("get_gesture_daemon_status"),
+  startGestureDaemon: () => invoke<string>("start_gesture_daemon"),
   driverStatus: () => invoke<DriverStatus>("get_driver_status"),
   installDriver: () => invoke<DriverActionResult>("install_driver"),
   uninstallDriver: () => invoke<DriverActionResult>("uninstall_driver"),

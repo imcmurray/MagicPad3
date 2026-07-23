@@ -1,8 +1,9 @@
-//! Gesture map persistence + input-remapper profile export.
+//! Gesture map persistence + libinput daemon apply + input-remapper export.
 
 use std::path::Path;
 
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
+use crate::gesture_daemon;
 use crate::models::{GestureAction, GestureMap, GestureTrigger};
 
 pub fn load(config_dir: &Path) -> AppResult<GestureMap> {
@@ -19,24 +20,42 @@ pub fn load(config_dir: &Path) -> AppResult<GestureMap> {
 
 pub fn save(config_dir: &Path, gestures: &GestureMap) -> AppResult<()> {
     std::fs::create_dir_all(config_dir)?;
+    let mut g = gestures.clone();
+    g.backend = detect_backend();
     std::fs::write(
         config_dir.join("gestures.json"),
-        serde_json::to_string_pretty(gestures)?,
+        serde_json::to_string_pretty(&g)?,
     )?;
     Ok(())
 }
 
+/// Persist map, export remapper profile, and start the user gesture daemon.
+pub fn apply(config_dir: &Path, gestures: &GestureMap) -> AppResult<String> {
+    save(config_dir, gestures)?;
+    let _ = export_input_remapper(gestures);
+    match gesture_daemon::ensure_daemon_running() {
+        Ok(msg) => Ok(msg),
+        Err(e) => {
+            // Still saved — report setup needs
+            Err(AppError::msg(format!(
+                "Gestures saved, but daemon not started: {e}"
+            )))
+        }
+    }
+}
+
 fn detect_backend() -> String {
-    if which("input-remapper-control") || which("input-remapper-gtk") {
-        "input-remapper".into()
-    } else if std::env::var("XDG_CURRENT_DESKTOP")
+    let desktop = std::env::var("XDG_CURRENT_DESKTOP")
         .unwrap_or_default()
-        .to_ascii_lowercase()
-        .contains("gnome")
-    {
-        "gnome".into()
+        .to_ascii_lowercase();
+    if desktop.contains("budgie") || which("labwc") {
+        "libinput-daemon (Budgie/labwc)".into()
+    } else if which("input-remapper-control") || which("input-remapper-gtk") {
+        "libinput-daemon + input-remapper".into()
+    } else if desktop.contains("gnome") {
+        "libinput-daemon (GNOME keys)".into()
     } else {
-        "libinput".into()
+        "libinput-daemon".into()
     }
 }
 

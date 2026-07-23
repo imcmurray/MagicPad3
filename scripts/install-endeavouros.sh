@@ -190,8 +190,19 @@ install_deps() {
     curl
     # optional but useful
     polkit
+    # multi-finger gesture daemon (MagicPad --gestures)
+    libinput-tools
+    wtype
   )
   run_root pacman -S --needed --noconfirm "${pkgs[@]}"
+
+  # Gesture daemon needs /dev/input access
+  local u="${SUDO_USER:-$USER}"
+  if [[ -n "$u" && "$u" != "root" ]] && ! id -nG "$u" 2>/dev/null | tr ' ' '\n' | grep -qx input; then
+    log "Adding $u to the 'input' group (required for trackpad gestures)…"
+    run_root usermod -aG input "$u"
+    warn "Log out and back in so the 'input' group membership applies."
+  fi
 
   if [[ "$WITH_REMAPPER" -eq 1 ]]; then
     log "Installing input-remapper…"

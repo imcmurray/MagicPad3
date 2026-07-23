@@ -68,8 +68,18 @@ impl TrackpadBackend for LinuxBackend {
     }
 
     fn set_gestures(&self, g: &GestureMap) -> AppResult<()> {
-        gestures::save(&self.config_dir, g)?;
-        gestures::export_input_remapper(g)
+        // Save always; start daemon when possible.
+        match gestures::apply(&self.config_dir, g) {
+            Ok(msg) => {
+                log::info!("gestures: {msg}");
+                Ok(())
+            }
+            Err(e) => {
+                // Map still saved inside apply before daemon start fails.
+                log::warn!("gestures apply: {e}");
+                Err(e)
+            }
+        }
     }
 
     fn driver_status(&self) -> AppResult<DriverStatus> {

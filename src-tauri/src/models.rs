@@ -244,6 +244,19 @@ pub struct AppSnapshot {
     pub driver: DriverStatus,
 }
 
+/// Linux gesture daemon readiness (Windows always reports unavailable).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GestureDaemonStatus {
+    pub available: bool,
+    pub running: bool,
+    pub libinput_ok: bool,
+    pub wtype_ok: bool,
+    pub input_group: bool,
+    pub unit_installed: bool,
+    pub message: String,
+}
+
 pub fn model_name_for_pid(pid: u16) -> String {
     KNOWN_PIDS
         .iter()
