@@ -30,8 +30,7 @@ GitHub releases: [imcmurray/MagicPad3/releases](https://github.com/imcmurray/Mag
 ```bash
 git clone https://github.com/imcmurray/MagicPad3.git
 cd MagicPad3
-./scripts/install-endeavouros.sh --local   # or omit --local for latest GitHub .deb
-./scripts/install-endeavouros.sh --verify
+./scripts/install-endeavouros.sh
 ```
 
 Full guide: [linux-install.md](./linux-install.md)

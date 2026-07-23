@@ -1,28 +1,15 @@
 #!/usr/bin/env bash
 # MagicPad Companion — EndeavourOS / Arch Linux installer
 #
-# Installs:
-#   • Runtime dependencies (pacman), including libinput-tools + wtype
-#   • App binary + desktop entry + icons (from GitHub release .deb, or local build)
-#   • udev rules for Magic Trackpad
-#   • Multi-finger gesture daemon (user systemd: magicpad-gestures.service)
-#   • Optional input-remapper profile
-#
 # Usage:
-#   ./scripts/install-endeavouros.sh              # full install (latest release)
-#   ./scripts/install-endeavouros.sh --helpers    # udev + gesture daemon only
-#   ./scripts/install-endeavouros.sh --gestures   # gesture daemon only (app already installed)
-#   ./scripts/install-endeavouros.sh --no-gestures  # full install without starting daemon
-#   ./scripts/install-endeavouros.sh --local      # use local tauri release build
-#   ./scripts/install-endeavouros.sh --deb PATH   # install from a specific .deb
-#   ./scripts/install-endeavouros.sh --user       # force install under ~/.local
-#   ./scripts/install-endeavouros.sh --system     # force install under /usr/local
-#   ./scripts/install-endeavouros.sh --verify     # post-install checklist only
-#   ./scripts/install-endeavouros.sh --uninstall  # remove app + udev + gesture service
+#   ./scripts/install-endeavouros.sh              # install everything
+#   ./scripts/install-endeavouros.sh uninstall    # remove app + helpers
+#   ./scripts/install-endeavouros.sh --help
 #
-# Install location (exactly one — never both):
-#   • ~/.local/bin  if that directory exists (or with --user)
-#   • /usr/local/bin otherwise (or with --system)
+# That is all. Defaults:
+#   • App from a local release build if present, otherwise latest GitHub .deb
+#   • ~/.local if ~/.local/bin exists, otherwise /usr/local (never both)
+#   • deps, udev, gesture daemon, checklist — always
 #
 # Docs: https://github.com/imcmurray/MagicPad3/blob/main/docs/linux-install.md
 
@@ -45,15 +32,8 @@ APP_NAME="MagicPad Companion"
 LIB_DIR_NAME="MagicPad Companion"
 GESTURES_UNIT="magicpad-gestures.service"
 
-MODE="full"          # full | helpers | gestures | uninstall | verify
-SOURCE="release"     # release | local | deb
-DEB_PATH=""
-# Install prefix: auto | user | system  (resolved after args → USER_INSTALL 0/1)
-PREFIX_MODE="auto"
+MODE="install"   # install | uninstall
 USER_INSTALL=0
-SKIP_DEPS=0
-WITH_REMAPPER=0
-INSTALL_GESTURES=1   # 0 with --no-gestures
 
 log()  { printf '==> %s\n' "$*"; }
 warn() { printf 'WARNING: %s\n' "$*" >&2; }
@@ -62,30 +42,30 @@ ok()   { printf '  [ok] %s\n' "$*"; }
 fail() { printf '  [!!] %s\n' "$*"; }
 
 usage() {
-  awk 'NR==1{next} /^#/{sub(/^# ?/,""); print; next} {exit}' "$0"
+  cat <<EOF
+MagicPad Companion installer (EndeavourOS / Arch)
+
+  ./scripts/install-endeavouros.sh           Install app + udev + gestures
+  ./scripts/install-endeavouros.sh uninstall Remove app + udev + gesture service
+  ./scripts/install-endeavouros.sh --help    This help
+
+No other flags. Re-run the installer anytime to repair/update.
+Docs: ${REPO_URL}/blob/main/docs/linux-install.md
+EOF
   exit 0
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --helpers|--helpers-only) MODE="helpers"; shift ;;
-    --gestures|--gestures-only) MODE="gestures"; shift ;;
-    --no-gestures) INSTALL_GESTURES=0; shift ;;
-    --local) SOURCE="local"; shift ;;
-    --deb)
-      SOURCE="deb"
-      DEB_PATH="${2:-}"
-      [[ -n "$DEB_PATH" ]] || die "--deb requires a path"
-      shift 2
+    uninstall|--uninstall) MODE="uninstall"; shift ;;
+    -h|--help|help) usage ;;
+    *)
+      die "Unknown option: $1
+
+Just run:
+  ./scripts/install-endeavouros.sh
+  ./scripts/install-endeavouros.sh uninstall"
       ;;
-    --user) PREFIX_MODE="user"; shift ;;
-    --system) PREFIX_MODE="system"; shift ;;
-    --skip-deps) SKIP_DEPS=1; shift ;;
-    --with-remapper) WITH_REMAPPER=1; shift ;;
-    --verify|--check) MODE="verify"; shift ;;
-    --uninstall) MODE="uninstall"; shift ;;
-    -h|--help) usage ;;
-    *) die "Unknown option: $1 (try --help)" ;;
   esac
 done
 
@@ -108,24 +88,14 @@ target_uid() {
   id -u "$(target_user)"
 }
 
-# Exactly one prefix: ~/.local if that bin dir exists (or --user), else /usr/local.
+# Exactly one prefix: ~/.local if that bin dir exists, else /usr/local.
 resolve_prefix_mode() {
-  case "$PREFIX_MODE" in
-    user)   USER_INSTALL=1 ;;
-    system) USER_INSTALL=0 ;;
-    auto)
-      if [[ -d "$(target_home)/.local/bin" ]]; then
-        USER_INSTALL=1
-      else
-        USER_INSTALL=0
-      fi
-      ;;
-    *) die "Internal error: bad PREFIX_MODE=$PREFIX_MODE" ;;
-  esac
-  if [[ "$USER_INSTALL" -eq 1 ]]; then
-    log "Install prefix: $(target_home)/.local  (user)"
+  if [[ -d "$(target_home)/.local/bin" ]]; then
+    USER_INSTALL=1
+    log "Install prefix: $(target_home)/.local"
   else
-    log "Install prefix: /usr/local  (system)"
+    USER_INSTALL=0
+    log "Install prefix: /usr/local"
   fi
 }
 
@@ -497,7 +467,7 @@ install_gesture_daemon() {
   log "Configuring multi-finger gesture daemon…"
 
   # Deps (only if missing — avoids sudo password prompt when already installed)
-  if [[ "$SKIP_DEPS" -eq 0 ]] && command -v pacman >/dev/null 2>&1; then
+  if command -v pacman >/dev/null 2>&1; then
     local need_pkgs=()
     command -v libinput >/dev/null 2>&1 || need_pkgs+=(libinput-tools)
     command -v wtype >/dev/null 2>&1 || command -v xdotool >/dev/null 2>&1 || need_pkgs+=(wtype)
@@ -520,8 +490,7 @@ install_gesture_daemon() {
   wayland="${WAYLAND_DISPLAY:-wayland-0}"
 
   if ! exe="$(resolve_app_binary)"; then
-    warn "magicpad-companion binary not found — install the app first, then re-run:"
-    warn "  ./scripts/install-endeavouros.sh --gestures"
+    warn "magicpad-companion binary not found — re-run: ./scripts/install-endeavouros.sh"
     return 1
   fi
   # Prefer absolute path for systemd
@@ -631,7 +600,6 @@ EOF
 
 # ── Dependencies ────────────────────────────────────────────────────────────
 install_deps() {
-  [[ "$SKIP_DEPS" -eq 1 ]] && { log "Skipping dependency install (--skip-deps)"; return; }
   is_arch_family || warn "Not detected as Arch/EndeavourOS — pacman steps may fail."
 
   need_cmd pacman
@@ -642,13 +610,10 @@ install_deps() {
     libappindicator-gtk3
     librsvg
     xdg-utils
-    # extract release .deb
     binutils
     tar
     curl
-    # optional but useful
     polkit
-    # multi-finger gesture daemon (MagicPad --gestures)
     libinput-tools
     wtype
   )
@@ -656,15 +621,21 @@ install_deps() {
 
   # Gesture daemon needs /dev/input access (account membership; sg handles session lag)
   ensure_input_group
+}
 
-  if [[ "$WITH_REMAPPER" -eq 1 ]]; then
-    log "Installing input-remapper…"
-    if pacman -Si input-remapper &>/dev/null; then
-      run_root pacman -S --needed --noconfirm input-remapper
-    else
-      warn "input-remapper not in enabled repos (try AUR: yay -S input-remapper)"
-    fi
+# Prefer local release build when present; otherwise download latest GitHub .deb.
+obtain_package() {
+  local bin="$ROOT/src-tauri/target/release/${APP_ID}"
+  local deb_dir="$ROOT/src-tauri/target/release/bundle/deb"
+  if [[ -d "$deb_dir" ]] && find "$deb_dir" -maxdepth 1 -type f -name '*.deb' 2>/dev/null | grep -q .; then
+    use_local_build
+    return
   fi
+  if [[ -x "$bin" ]]; then
+    use_local_build
+    return
+  fi
+  download_latest_deb
 }
 
 # ── Helpers (udev, remapper profile, unit) ──────────────────────────────────
@@ -766,7 +737,7 @@ for a in rel.get("assets",[]):
     url="$(printf '%s\n' "$url" | sed -n '1p')"
   fi
 
-  [[ -n "$url" ]] || die "No amd64 .deb asset found on latest release. Build with --local or pass --deb PATH."
+  [[ -n "$url" ]] || die "No amd64 .deb on latest GitHub release. Build locally: npm run tauri -- build --bundles deb"
   log "Downloading $name …"
   EXTRACT_TMP="$(mktemp -d -t magicpad-install.XXXXXX)"
   local deb_file="$EXTRACT_TMP/download.deb"
@@ -823,7 +794,7 @@ EOF
     return
   fi
 
-  die "No local build found. Run: npm run tauri -- build --bundles deb   or omit --local to download a release."
+  die "No local build found under src-tauri/target/release/."
 }
 
 # ── Install app files ───────────────────────────────────────────────────────
@@ -949,7 +920,7 @@ do_verify() {
     while IFS= read -r p; do
       [[ -n "$p" && -e "$p" ]] || continue
       if [[ "$p" != "$bin" ]]; then
-        fail "extra copy at $p (should only install in one place) — re-run installer"
+        fail "extra copy at $p — re-run: ./scripts/install-endeavouros.sh"
         extras=$((extras + 1))
         issues=$((issues + 1))
       fi
@@ -1005,7 +976,7 @@ do_verify() {
   if [[ -f "$RULE_DST" ]]; then
     ok "udev rule $RULE_DST"
   else
-    fail "udev rule missing — re-run installer or --helpers"
+    fail "udev rule missing — re-run installer"
     issues=$((issues + 1))
   fi
 
@@ -1013,7 +984,7 @@ do_verify() {
   if [[ -f "${home}/.config/magicpad-companion/gestures.json" ]]; then
     ok "gestures.json present"
   else
-    fail "gestures.json missing — will be seeded by --gestures"
+    fail "gestures.json missing — re-run installer"
     issues=$((issues + 1))
   fi
 
@@ -1024,14 +995,14 @@ do_verify() {
     if grep -q 'sg input' "$unit"; then
       ok "unit uses sg input (session-group lag safe)"
     else
-      fail "unit missing sg input — re-run: ./scripts/install-endeavouros.sh --gestures"
+      fail "unit missing sg input — re-run installer"
       issues=$((issues + 1))
     fi
     if grep -q -- '--gestures' "$unit"; then
       ok "unit ExecStart runs --gestures"
     fi
   else
-    fail "gesture unit missing — ./scripts/install-endeavouros.sh --gestures"
+    fail "gesture unit missing — re-run installer"
     issues=$((issues + 1))
   fi
 
@@ -1042,11 +1013,11 @@ do_verify() {
     if grep -q 'sg input' "$auto"; then
       ok "autostart uses sg input"
     else
-      fail "autostart without sg input — re-run --gestures"
+      fail "autostart without sg input — re-run installer"
       issues=$((issues + 1))
     fi
   else
-    fail "autostart missing (optional backup)"
+    fail "autostart missing — re-run installer"
     issues=$((issues + 1))
   fi
 
@@ -1071,14 +1042,8 @@ do_verify() {
   if [[ "$issues" -eq 0 ]]; then
     log "All checks passed."
   else
-    warn "${issues} issue(s) found — re-run full install or --gestures / --helpers as needed."
+    warn "${issues} issue(s) found — re-run: ./scripts/install-endeavouros.sh"
   fi
-  echo ""
-  echo "  Quick fixes:"
-  echo "    ./scripts/install-endeavouros.sh --local     # rebuild+install from tree"
-  echo "    ./scripts/install-endeavouros.sh --gestures  # repair daemon unit"
-  echo "    systemctl --user restart ${GESTURES_UNIT}"
-  echo "    journalctl --user -u ${GESTURES_UNIT} -f"
   echo ""
   return "$issues"
 }
@@ -1087,20 +1052,12 @@ print_next_steps() {
   echo ""
   log "Install complete."
   echo ""
-  echo "  Next steps:"
+  echo "  Next:"
   echo "    1. Replug the Magic Trackpad (or re-pair Bluetooth)"
   echo "    2. Start the app:  ${APP_ID}"
-  echo "    3. Gestures: systemctl --user status ${GESTURES_UNIT}"
-  echo "    4. Verify:   ./scripts/install-endeavouros.sh --verify"
-  echo ""
-  echo "  Defaults (Budgie/labwc):"
-  echo "    3-finger swipe L/R  → workspaces"
-  echo "    3-finger tap        → Budgie Screenshot"
-  echo "    4-finger swipe L/R  → browser back/forward"
-  echo "    4-finger tap        → unbound (set Custom, e.g. flameshot gui)"
-  echo "    pinch in/out        → zoom (Ctrl+-/Ctrl+=)"
   echo ""
   echo "  Docs: ${REPO_URL}/blob/main/docs/linux-install.md"
+  echo "  What's new: ${REPO_URL}/blob/main/docs/whats-new.md"
   echo ""
 }
 
@@ -1111,7 +1068,6 @@ main() {
   echo " ${REPO_URL}"
   echo ""
 
-  # Pick ~/.local vs /usr/local once (exactly one install location)
   resolve_prefix_mode
 
   if [[ "$MODE" == "uninstall" ]]; then
@@ -1119,43 +1075,11 @@ main() {
     return
   fi
 
-  if [[ "$MODE" == "verify" ]]; then
-    # Exit non-zero when checklist finds issues (CI / scripting)
-    do_verify
-    return
-  fi
-
-  if [[ "$MODE" == "gestures" ]]; then
-    install_gesture_daemon || true
-    do_verify || true
-    log "Done (gesture daemon). Check: systemctl --user status ${GESTURES_UNIT}"
-    return
-  fi
-
-  if [[ "$MODE" == "helpers" ]]; then
-    local rule="$RULE_SRC_TREE"
-    [[ -f "$rule" ]] || die "Run from a git checkout (missing packaging/linux)."
-    install_helpers "$rule"
-    if [[ "$INSTALL_GESTURES" -eq 1 ]]; then
-      install_gesture_daemon || true
-    fi
-    do_verify || true
-    log "Done (helpers). Replug the trackpad, then open MagicPad Companion."
-    return
-  fi
-
-  # Full install
+  # Always: deps → app → udev → gestures → checklist
   install_deps
-
-  case "$SOURCE" in
-    release) download_latest_deb ;;
-    local)   use_local_build ;;
-    deb)     extract_deb "$DEB_PATH" ;;
-  esac
-
+  obtain_package
   install_app_from_extract
 
-  # Prefer udev rule from package resources, fall back to tree
   local rule_from_pkg
   rule_from_pkg="$(find "$EXTRACT_ROOT" -name '99-magic-trackpad.rules' 2>/dev/null | head -1 || true)"
   if [[ -n "$rule_from_pkg" ]]; then
@@ -1166,12 +1090,7 @@ main() {
     warn "No udev rule found to install."
   fi
 
-  if [[ "$INSTALL_GESTURES" -eq 1 ]]; then
-    install_gesture_daemon || true
-  else
-    log "Skipped gesture daemon (--no-gestures)."
-  fi
-
+  install_gesture_daemon || true
   print_next_steps
   do_verify || true
 }

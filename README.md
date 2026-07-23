@@ -154,13 +154,12 @@ CI builds **Windows NSIS/MSI + portable EXE** and **Linux DEB** on every push to
 ```bash
 git clone https://github.com/imcmurray/MagicPad3.git
 cd MagicPad3
-chmod +x scripts/install-endeavouros.sh
 ./scripts/install-endeavouros.sh
 # then: magicpad-companion
+# remove: ./scripts/install-endeavouros.sh uninstall
 ```
 
-Options: `--local`, `--user` / `--system`, `--helpers`, `--gestures`, `--no-gestures`, `--verify`, `--uninstall`.  
-App binary goes in **exactly one** place: `~/.local/bin` if that directory exists, otherwise `/usr/local/bin`. Default install enables the gesture daemon (`sg input`), seeds gestures, and runs `--verify`.  
+No flags for install — deps, app, udev, and gesture daemon in one shot.  
 See [docs/linux-install.md](docs/linux-install.md).
 
 ### Windows driver package fetch
