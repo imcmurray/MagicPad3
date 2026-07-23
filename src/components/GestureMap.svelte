@@ -112,7 +112,7 @@
         </li>
         <li class:ok={daemon.wtypeOk}>wtype {daemon.wtypeOk ? "✓" : "✗"}</li>
         <li class:ok={daemon.inputGroup}>
-          input group {daemon.inputGroup ? "✓" : "✗ (log out after adding)"}
+          input group {daemon.inputGroup ? "✓" : "✗"}
         </li>
       </ul>
       {#if !daemon.libinputOk || !daemon.wtypeOk}
@@ -122,7 +122,9 @@
       {/if}
       {#if !daemon.inputGroup}
         <p class="mono small tip">
-          sudo usermod -aG input "$USER" &amp;&amp; # then log out/in
+          sudo usermod -aG input "$USER"
+          <br />
+          systemctl --user restart magicpad-gestures.service
         </p>
       {/if}
       <div class="daemon-actions">

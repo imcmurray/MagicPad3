@@ -780,10 +780,17 @@ pub use crate::models::GestureDaemonStatus;
 pub fn daemon_status() -> GestureDaemonStatus {
     let libinput_ok = which("libinput");
     let wtype_ok = which("wtype") || which("xdotool");
-    let input_group = user_in_input_group() || user_in_input_group_passwd();
+    // Account membership (/etc/group or `id user`) OR live session groups.
+    // Session may lag after usermod until re-login; that is OK because the
+    // service runs under `sg input`.
+    let input_group = user_in_input_group()
+        || user_in_input_group_passwd()
+        || user_in_input_group_via_id_user();
     let can_read = can_read_trackpad_events();
     let unit_installed = unit_path().map(|p| p.exists()).unwrap_or(false);
     let running = unit_is_active();
+    // Green check if account is in the group OR daemon can already read devices
+    let input_ok = input_group || (running && can_read) || can_read;
 
     let mut parts = Vec::new();
     if !libinput_ok {
@@ -792,21 +799,17 @@ pub fn daemon_status() -> GestureDaemonStatus {
     if !wtype_ok {
         parts.push("install wtype");
     }
-    if !input_group {
-        parts.push("sudo usermod -aG input $USER  (then re-login, or re-run install --gestures)");
-    } else if !can_read {
-        parts.push(
-            "session cannot open /dev/input yet — restart magicpad-gestures (uses sg input) or re-login",
-        );
+    if !input_ok {
+        parts.push("sudo usermod -aG input $USER  (then: systemctl --user restart magicpad-gestures.service)");
     }
-    if libinput_ok && wtype_ok && input_group && can_read && !running {
-        parts.push("click Save gestures to start the daemon");
+    if libinput_ok && wtype_ok && input_ok && !running {
+        parts.push("click Save gestures / Start daemon");
     }
 
-    let message = if running && can_read {
+    let message = if running && (can_read || input_group) {
         "Gesture daemon is running".into()
-    } else if running && !can_read {
-        "Daemon process is up but cannot read the trackpad (input permissions). Restart the service after joining the input group.".into()
+    } else if running && !can_read && !input_group {
+        "Daemon is up but cannot read the trackpad — join the input group and restart the service.".into()
     } else if parts.is_empty() {
         "Ready — save gestures to start the daemon".into()
     } else {
@@ -818,7 +821,7 @@ pub fn daemon_status() -> GestureDaemonStatus {
         running,
         libinput_ok,
         wtype_ok,
-        input_group,
+        input_group: input_ok,
         unit_installed,
         message,
     }
@@ -975,8 +978,25 @@ fn unit_is_active() -> bool {
         }
 }
 
+fn current_username() -> String {
+    std::env::var("USER")
+        .or_else(|_| std::env::var("LOGNAME"))
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            Command::new("id")
+                .arg("-un")
+                .output()
+                .ok()
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        })
+        .unwrap_or_default()
+}
+
 fn user_in_input_group() -> bool {
-    // Current process credentials (session groups)
+    // Current process credentials (session groups — lag after usermod)
     Command::new("id")
         .arg("-nG")
         .output()
@@ -988,9 +1008,7 @@ fn user_in_input_group() -> bool {
 
 /// True if /etc/group lists the user in `input` (even before re-login).
 fn user_in_input_group_passwd() -> bool {
-    let user = std::env::var("USER")
-        .or_else(|_| std::env::var("LOGNAME"))
-        .unwrap_or_default();
+    let user = current_username();
     if user.is_empty() {
         return false;
     }
@@ -998,12 +1016,30 @@ fn user_in_input_group_passwd() -> bool {
         .ok()
         .map(|g| {
             g.lines().any(|line| {
-                let mut parts = line.split(':');
-                let name = parts.next().unwrap_or("");
-                let members = parts.nth(2).unwrap_or(""); // skip passwd, gid
-                name == "input" && members.split(',').any(|m| m == user)
+                let parts: Vec<&str> = line.trim().split(':').collect();
+                // name:passwd:gid:user1,user2
+                parts.len() >= 4
+                    && parts[0] == "input"
+                    && parts[3].split(',').any(|m| m == user)
             })
         })
+        .unwrap_or(false)
+}
+
+/// `id <username>` reflects account membership even when this process's
+/// supplementary groups were frozen at login.
+fn user_in_input_group_via_id_user() -> bool {
+    let user = current_username();
+    if user.is_empty() {
+        return false;
+    }
+    Command::new("id")
+        .arg("-nG")
+        .arg(&user)
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.split_whitespace().any(|g| g == "input"))
         .unwrap_or(false)
 }
 
