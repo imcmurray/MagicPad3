@@ -20,9 +20,30 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        if arg == "--gesture-status" {
+            #[cfg(target_os = "linux")]
+            {
+                let s = magicpad_companion_lib::gesture_daemon::daemon_status();
+                println!(
+                    "running={} libinput={} wtype={} input_group={} unit={} msg={}",
+                    s.running,
+                    s.libinput_ok,
+                    s.wtype_ok,
+                    s.input_group,
+                    s.unit_installed,
+                    s.message
+                );
+                std::process::exit(if s.input_group && s.libinput_ok { 0 } else { 1 });
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                eprintln!("Linux only");
+                std::process::exit(1);
+            }
+        }
         if arg == "--help" || arg == "-h" {
             eprintln!(
-                "MagicPad Companion\n  (no args)     Launch GUI\n  --gestures    Run multi-finger gesture daemon (Linux)"
+                "MagicPad Companion\n  (no args)          Launch GUI\n  --gestures         Run multi-finger gesture daemon (Linux)\n  --gesture-status   Print daemon readiness (Linux)"
             );
             std::process::exit(0);
         }

@@ -780,17 +780,17 @@ pub use crate::models::GestureDaemonStatus;
 pub fn daemon_status() -> GestureDaemonStatus {
     let libinput_ok = which("libinput");
     let wtype_ok = which("wtype") || which("xdotool");
-    // Account membership (/etc/group or `id user`) OR live session groups.
-    // Session may lag after usermod until re-login; that is OK because the
-    // service runs under `sg input`.
-    let input_group = user_in_input_group()
-        || user_in_input_group_passwd()
-        || user_in_input_group_via_id_user();
-    let can_read = can_read_trackpad_events();
     let unit_installed = unit_path().map(|p| p.exists()).unwrap_or(false);
     let running = unit_is_active();
-    // Green check if account is in the group OR daemon can already read devices
-    let input_ok = input_group || (running && can_read) || can_read;
+
+    // Multiple signals — session groups often lag; account membership is enough
+    // because the service starts with `sg input`.
+    let in_account = user_listed_in_input_group();
+    let in_session = user_in_input_group();
+    let can_read = can_read_trackpad_events();
+    // Green whenever the account OR live access path is fine, or the daemon
+    // already started successfully under sg input.
+    let input_ok = in_account || in_session || can_read || running;
 
     let mut parts = Vec::new();
     if !libinput_ok {
@@ -799,17 +799,23 @@ pub fn daemon_status() -> GestureDaemonStatus {
     if !wtype_ok {
         parts.push("install wtype");
     }
-    if !input_ok {
-        parts.push("sudo usermod -aG input $USER  (then: systemctl --user restart magicpad-gestures.service)");
+    if !in_account && !in_session && !can_read && !running {
+        parts.push(
+            "sudo usermod -aG input $USER && systemctl --user restart magicpad-gestures.service",
+        );
     }
     if libinput_ok && wtype_ok && input_ok && !running {
         parts.push("click Save gestures / Start daemon");
     }
 
-    let message = if running && (can_read || input_group) {
-        "Gesture daemon is running".into()
-    } else if running && !can_read && !input_group {
-        "Daemon is up but cannot read the trackpad — join the input group and restart the service.".into()
+    let message = if running {
+        if in_account && !in_session {
+            "Gesture daemon is running (input group OK on account; session groups lag is normal)".into()
+        } else {
+            "Gesture daemon is running".into()
+        }
+    } else if !input_ok {
+        "Cannot access trackpad input — join the input group and start the daemon.".into()
     } else if parts.is_empty() {
         "Ready — save gestures to start the daemon".into()
     } else {
@@ -842,12 +848,12 @@ pub fn ensure_daemon_running() -> Result<String, String> {
         if !which("wtype") && !which("xdotool") {
             return Err("wtype missing. Run: sudo pacman -S wtype".into());
         }
-        if !user_in_input_group() && !user_in_input_group_passwd() {
+        if !user_listed_in_input_group() && !user_in_input_group() && !can_read_trackpad_events()
+        {
             return Err(
                 "Your user is not in the 'input' group (needed to read trackpad events). \
                  Run:  sudo usermod -aG input $USER   then: \
-                 systemctl --user restart magicpad-gestures.service \
-                 (or log out and back in)."
+                 systemctl --user restart magicpad-gestures.service"
                     .into(),
             );
         }
@@ -996,7 +1002,7 @@ fn current_username() -> String {
 }
 
 fn user_in_input_group() -> bool {
-    // Current process credentials (session groups — lag after usermod)
+    // Current process credentials (session groups — often lag after usermod)
     Command::new("id")
         .arg("-nG")
         .output()
@@ -1006,41 +1012,53 @@ fn user_in_input_group() -> bool {
         .unwrap_or(false)
 }
 
-/// True if /etc/group lists the user in `input` (even before re-login).
-fn user_in_input_group_passwd() -> bool {
+/// True if the account is listed in the input group (getent /etc/group / id user).
+/// Does NOT depend on the current process's supplementary groups.
+fn user_listed_in_input_group() -> bool {
     let user = current_username();
     if user.is_empty() {
         return false;
     }
-    std::fs::read_to_string("/etc/group")
-        .ok()
-        .map(|g| {
-            g.lines().any(|line| {
-                let parts: Vec<&str> = line.trim().split(':').collect();
-                // name:passwd:gid:user1,user2
-                parts.len() >= 4
-                    && parts[0] == "input"
-                    && parts[3].split(',').any(|m| m == user)
-            })
-        })
-        .unwrap_or(false)
-}
 
-/// `id <username>` reflects account membership even when this process's
-/// supplementary groups were frozen at login.
-fn user_in_input_group_via_id_user() -> bool {
-    let user = current_username();
-    if user.is_empty() {
-        return false;
+    // getent group input → input:x:992:ianm,other
+    if let Ok(out) = Command::new("getent").args(["group", "input"]).output() {
+        if out.status.success() {
+            if let Ok(line) = String::from_utf8(out.stdout) {
+                let line = line.trim();
+                if let Some(members) = line.split(':').nth(3) {
+                    if members.split(',').any(|m| m == user) {
+                        return true;
+                    }
+                }
+            }
+        }
     }
-    Command::new("id")
-        .arg("-nG")
-        .arg(&user)
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.split_whitespace().any(|g| g == "input"))
-        .unwrap_or(false)
+
+    // /etc/group fallback
+    if let Ok(g) = std::fs::read_to_string("/etc/group") {
+        for line in g.lines() {
+            let parts: Vec<&str> = line.trim().split(':').collect();
+            if parts.len() >= 4
+                && parts[0] == "input"
+                && parts[3].split(',').any(|m| m == user)
+            {
+                return true;
+            }
+        }
+    }
+
+    // id -nG <user> reflects account DB, not this process
+    if let Ok(out) = Command::new("id").args(["-nG", &user]).output() {
+        if out.status.success() {
+            if let Ok(s) = String::from_utf8(out.stdout) {
+                if s.split_whitespace().any(|g| g == "input") {
+                    return true;
+                }
+            }
+        }
+    }
+
+    false
 }
 
 fn can_read_trackpad_events() -> bool {
