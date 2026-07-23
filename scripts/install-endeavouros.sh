@@ -625,6 +625,21 @@ install_app_from_extract() {
   log "Installing binary → $bin_dst"
   install_file 755 "$bin_src" "$bin_dst"
 
+  # Keep other known install locations in sync so PATH/desktop don't keep an old copy.
+  # (Common failure: ~/.local/bin is earlier on PATH than /usr/local/bin.)
+  local other_bins=(
+    "${HOME}/.local/bin/${APP_ID}"
+    "/usr/local/bin/${APP_ID}"
+    "/usr/bin/${APP_ID}"
+  )
+  local ob
+  for ob in "${other_bins[@]}"; do
+    if [[ "$ob" != "$bin_dst" && -e "$ob" ]]; then
+      log "Updating existing binary at $ob"
+      install_file 755 "$bin_src" "$ob" || warn "Could not update $ob (permission?)"
+    fi
+  done
+
   if [[ -d "$lib_src" ]]; then
     log "Installing resources → $lib_dst"
     if [[ "$lib_dst" == /usr/* ]]; then
