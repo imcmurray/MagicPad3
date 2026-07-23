@@ -28,7 +28,8 @@ Replug the Magic Trackpad (or re-pair Bluetooth) and open the **Status** tab.
 | *(default)* | Full install from latest GitHub release **+ gesture daemon** |
 | `--local` | Use a local `tauri build` under `src-tauri/target/release/` |
 | `--deb PATH` | Install from a specific `.deb` file |
-| `--user` | Install app under `~/.local` (udev still needs root) |
+| `--user` | Force install under `~/.local` (create bin dir if needed) |
+| `--system` | Force install under `/usr/local` |
 | `--helpers` | udev + remapper staging **+ gesture daemon** |
 | `--gestures` | Gesture daemon only (app already installed) |
 | `--no-gestures` | Full/helpers install without starting the daemon |
@@ -36,6 +37,12 @@ Replug the Magic Trackpad (or re-pair Bluetooth) and open the **Status** tab.
 | `--with-remapper` | Also `pacman -S input-remapper` if available |
 | `--skip-deps` | Skip pacman package install |
 | `--uninstall` | Remove app (all known paths), udev rule, and gesture service |
+
+**Install location (exactly one, never both):**
+
+- If `~/.local/bin` **exists** → install there (no root for the app binary)
+- Otherwise → `/usr/local/bin`
+- Re-running the installer **removes** any leftover copy in the other tree
 
 Examples:
 
@@ -50,8 +57,8 @@ Examples:
 npm run tauri -- build --bundles deb
 ./scripts/install-endeavouros.sh --local
 
-# User-local binary (no root for app files)
-./scripts/install-endeavouros.sh --user
+# Force system prefix even if ~/.local/bin exists
+./scripts/install-endeavouros.sh --system
 
 # Checklist only
 ./scripts/install-endeavouros.sh --verify
@@ -63,7 +70,7 @@ npm run tauri -- build --bundles deb
 
 1. **Packages**: WebKit/GTK runtime + `libinput-tools` + `wtype` (+ `binutils` to unpack release `.deb`)
 2. **`input` group**: `usermod -aG input` (account membership via getent — not session groups)
-3. **App binary**: installs under `/usr/local` (or `~/.local` with `--user`) and **syncs every other known path** so PATH never keeps a stale copy (`~/.local/bin` is often *before* `/usr/local/bin`)
+3. **App binary**: **one** location only — `~/.local` if `~/.local/bin` exists, else `/usr/local` (purges the other)
 4. **udev** rule for Magic Trackpad
 5. **Gesture daemon**:
    - Seeds `~/.config/magicpad-companion/gestures.json` if missing
@@ -225,19 +232,6 @@ wtype -M logo -k Prior -m logo
 sg input -c 'magicpad-companion --gestures'
 ```
 
-### Troubleshooting dual installs
-
-If the menu or `magicpad-companion` still shows an old version (e.g. 0.2.x after installing 0.3.x):
-
-```bash
-which -a magicpad-companion
-# often both exist:
-#   ~/.local/bin/magicpad-companion    ← earlier on PATH
-#   /usr/local/bin/magicpad-companion
-./scripts/install-endeavouros.sh --local   # syncs every known path
-./scripts/install-endeavouros.sh --verify
-```
-
 ### Troubleshooting “not in input group” in Status
 
 The Status checklist uses **account** membership (`getent group input` / `id -nG $USER`), not the current process’s session groups. If you already ran `usermod` and the daemon is active under `sg input`, a red ✗ should clear after the fix in v0.3.3+ — reinstall from a current build if it still lies.
@@ -273,8 +267,8 @@ In the app **Status** tab you should see a single Magic Trackpad entry (USB-C / 
 
 ```bash
 ./scripts/install-endeavouros.sh --uninstall
-# Removes binaries under /usr/local, /usr, and ~/.local, plus udev + gesture unit.
-# Config left at: ~/.config/magicpad-companion
+# Removes the app from ~/.local and/or /usr/local (whichever is present),
+# plus udev + gesture unit. Config left at: ~/.config/magicpad-companion
 ```
 
 ## Other distros

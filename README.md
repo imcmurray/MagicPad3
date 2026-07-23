@@ -157,8 +157,8 @@ chmod +x scripts/install-endeavouros.sh
 # then: magicpad-companion
 ```
 
-Options: `--local`, `--user`, `--helpers`, `--gestures` (daemon only), `--no-gestures`, `--verify`, `--uninstall`.  
-The default install also enables the **multi-finger gesture daemon** (`magicpad-gestures.service` under `sg input`), seeds gestures, syncs dual install paths, and runs a post-install checklist.  
+Options: `--local`, `--user` / `--system`, `--helpers`, `--gestures`, `--no-gestures`, `--verify`, `--uninstall`.  
+App binary goes in **exactly one** place: `~/.local/bin` if that directory exists, otherwise `/usr/local/bin`. Default install enables the gesture daemon (`sg input`), seeds gestures, and runs `--verify`.  
 See [docs/linux-install.md](docs/linux-install.md).
 
 ### Windows driver package fetch

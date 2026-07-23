@@ -15,9 +15,14 @@
 #   ./scripts/install-endeavouros.sh --no-gestures  # full install without starting daemon
 #   ./scripts/install-endeavouros.sh --local      # use local tauri release build
 #   ./scripts/install-endeavouros.sh --deb PATH   # install from a specific .deb
-#   ./scripts/install-endeavouros.sh --user       # install app under ~/.local
+#   ./scripts/install-endeavouros.sh --user       # force install under ~/.local
+#   ./scripts/install-endeavouros.sh --system     # force install under /usr/local
 #   ./scripts/install-endeavouros.sh --verify     # post-install checklist only
 #   ./scripts/install-endeavouros.sh --uninstall  # remove app + udev + gesture service
+#
+# Install location (exactly one — never both):
+#   • ~/.local/bin  if that directory exists (or with --user)
+#   • /usr/local/bin otherwise (or with --system)
 #
 # Docs: https://github.com/imcmurray/MagicPad3/blob/main/docs/linux-install.md
 
@@ -43,6 +48,8 @@ GESTURES_UNIT="magicpad-gestures.service"
 MODE="full"          # full | helpers | gestures | uninstall | verify
 SOURCE="release"     # release | local | deb
 DEB_PATH=""
+# Install prefix: auto | user | system  (resolved after args → USER_INSTALL 0/1)
+PREFIX_MODE="auto"
 USER_INSTALL=0
 SKIP_DEPS=0
 WITH_REMAPPER=0
@@ -71,7 +78,8 @@ while [[ $# -gt 0 ]]; do
       [[ -n "$DEB_PATH" ]] || die "--deb requires a path"
       shift 2
       ;;
-    --user) USER_INSTALL=1; shift ;;
+    --user) PREFIX_MODE="user"; shift ;;
+    --system) PREFIX_MODE="system"; shift ;;
     --skip-deps) SKIP_DEPS=1; shift ;;
     --with-remapper) WITH_REMAPPER=1; shift ;;
     --verify|--check) MODE="verify"; shift ;;
@@ -98,6 +106,27 @@ target_home() {
 
 target_uid() {
   id -u "$(target_user)"
+}
+
+# Exactly one prefix: ~/.local if that bin dir exists (or --user), else /usr/local.
+resolve_prefix_mode() {
+  case "$PREFIX_MODE" in
+    user)   USER_INSTALL=1 ;;
+    system) USER_INSTALL=0 ;;
+    auto)
+      if [[ -d "$(target_home)/.local/bin" ]]; then
+        USER_INSTALL=1
+      else
+        USER_INSTALL=0
+      fi
+      ;;
+    *) die "Internal error: bad PREFIX_MODE=$PREFIX_MODE" ;;
+  esac
+  if [[ "$USER_INSTALL" -eq 1 ]]; then
+    log "Install prefix: $(target_home)/.local  (user)"
+  else
+    log "Install prefix: /usr/local  (system)"
+  fi
 }
 
 # Account membership in `input` (getent /etc/group + id user) — NOT session groups.
@@ -184,7 +213,7 @@ run_root() {
   fi
 }
 
-# Always use the target user's home (correct under sudo + --user)
+# Single install root (never both ~/.local and /usr/local)
 prefix_bin() {
   if [[ "$USER_INSTALL" -eq 1 ]]; then
     echo "$(target_home)/.local/bin"
@@ -209,15 +238,85 @@ prefix_lib() {
   fi
 }
 
+# Paths that are *not* the chosen prefix — remove leftovers so only one copy remains
+other_prefix_paths() {
+  local home
+  home="$(target_home)"
+  if [[ "$USER_INSTALL" -eq 1 ]]; then
+    # Installing to ~/.local → purge system copies
+    printf '%s\n' \
+      "/usr/local/bin/${APP_ID}" \
+      "/usr/bin/${APP_ID}" \
+      "/usr/local/lib/${LIB_DIR_NAME}" \
+      "/usr/local/share/applications/${APP_ID}.desktop" \
+      "/usr/local/share/applications/${APP_NAME}.desktop"
+  else
+    # Installing to /usr/local → purge user copies
+    printf '%s\n' \
+      "${home}/.local/bin/${APP_ID}" \
+      "${home}/.local/lib/${LIB_DIR_NAME}" \
+      "${home}/.local/share/applications/${APP_ID}.desktop" \
+      "${home}/.local/share/applications/${APP_NAME}.desktop"
+  fi
+}
+
 all_known_bins() {
-  # Prints every path we might have installed the app binary to
+  # Every place we might ever have put the binary (uninstall / leftover checks)
   local home
   home="$(target_home)"
   printf '%s\n' \
     "${home}/.local/bin/${APP_ID}" \
     "/usr/local/bin/${APP_ID}" \
-    "/usr/bin/${APP_ID}" \
-    "$(prefix_bin)/${APP_ID}"
+    "/usr/bin/${APP_ID}"
+}
+
+# Soft remove — never abort install if leftover cleanup needs root we don't have
+try_remove_path() {
+  local p="$1"
+  if [[ ! -e "$p" && ! -L "$p" ]]; then
+    return 0
+  fi
+  log "Removing other-location leftover: $p"
+  if [[ "$p" == /usr/* ]] || [[ "$p" == /etc/* ]]; then
+    if [[ "$(id -u)" -eq 0 ]]; then
+      rm -rf "$p" && return 0
+    elif command -v sudo >/dev/null 2>&1; then
+      # Interactive sudo when we have a TTY; non-interactive (-n) otherwise
+      if [[ -t 0 ]] || [[ -t 2 ]]; then
+        if sudo rm -rf "$p" 2>/dev/null; then
+          return 0
+        fi
+      elif sudo -n rm -rf "$p" 2>/dev/null; then
+        return 0
+      fi
+      warn "Could not remove $p (need: sudo rm -rf '$p')"
+      return 1
+    else
+      warn "Could not remove $p (need root)"
+      return 1
+    fi
+  else
+    rm -rf "$p" 2>/dev/null || warn "Could not remove $p"
+  fi
+}
+
+# After installing to the chosen prefix, delete any copy in the other tree.
+remove_other_install() {
+  local p home s
+  while IFS= read -r p; do
+    [[ -n "$p" ]] || continue
+    try_remove_path "$p" || true
+  done < <(other_prefix_paths)
+  home="$(target_home)"
+  if [[ "$USER_INSTALL" -eq 1 ]]; then
+    for s in 32x32 128x128 256x256 256x256@2; do
+      try_remove_path "/usr/local/share/icons/hicolor/${s}/apps/${APP_ID}.png" || true
+    done
+  else
+    for s in 32x32 128x128 256x256 256x256@2; do
+      try_remove_path "${home}/.local/share/icons/hicolor/${s}/apps/${APP_ID}.png" || true
+    done
+  fi
 }
 
 sg_or_direct_exec() {
@@ -327,65 +426,29 @@ do_uninstall() {
 
 # ── Gesture daemon (user systemd) ───────────────────────────────────────────
 resolve_app_binary() {
-  # Prefer the *newest* installed binary so dual PATH installs never leave the
-  # daemon on a stale /usr/local while ~/.local (earlier on PATH) is newer.
+  # Single preferred path first, then the other known locations (pre-cleanup leftovers)
   local candidates=(
     "$(prefix_bin)/${APP_ID}"
-    "/usr/local/bin/${APP_ID}"
     "$(target_home)/.local/bin/${APP_ID}"
+    "/usr/local/bin/${APP_ID}"
     "/usr/bin/${APP_ID}"
+    "$ROOT/src-tauri/target/release/${APP_ID}"
   )
-  local c best="" best_mtime=0 mtime
+  local c seen=""
   for c in "${candidates[@]}"; do
+    [[ -n "$c" ]] || continue
+    case " $seen " in *" $c "*) continue ;; esac
+    seen+=" $c"
     if [[ -x "$c" ]]; then
-      mtime="$(stat -c %Y "$c" 2>/dev/null || echo 0)"
-      if [[ -z "$best" || "$mtime" -gt "$best_mtime" ]]; then
-        best="$c"
-        best_mtime="$mtime"
-      fi
+      echo "$c"
+      return 0
     fi
   done
-  if [[ -n "$best" ]]; then
-    echo "$best"
-    return 0
-  fi
-  # Dev tree last (never preferred over an installed copy)
-  if [[ -x "$ROOT/src-tauri/target/release/${APP_ID}" ]]; then
-    echo "$ROOT/src-tauri/target/release/${APP_ID}"
-    return 0
-  fi
   if command -v "$APP_ID" >/dev/null 2>&1; then
     command -v "$APP_ID"
     return 0
   fi
   return 1
-}
-
-# Copy the canonical (newest) binary to every other known install path that already exists.
-sync_installed_binaries() {
-  local src="${1:-}"
-  if [[ -z "$src" ]]; then
-    src="$(resolve_app_binary)" || return 1
-  fi
-  [[ -x "$src" ]] || return 1
-  local p synced=0 failed=0
-  while IFS= read -r p; do
-    [[ -n "$p" ]] || continue
-    if [[ "$p" != "$src" && -e "$p" ]]; then
-      if ! cmp -s "$src" "$p" 2>/dev/null; then
-        log "Syncing binary $p ← $src"
-        if install_file 755 "$src" "$p" 2>/dev/null; then
-          synced=$((synced + 1))
-        else
-          failed=$((failed + 1))
-          warn "Could not sync $p (need root?). Daemon will use: $src"
-        fi
-      fi
-    fi
-  done < <(all_known_bins | sort -u)
-  if [[ "$failed" -gt 0 ]]; then
-    warn "Stale copy left behind — re-run with sudo, or: sudo install -m755 '$src' /usr/local/bin/${APP_ID}"
-  fi
 }
 
 seed_default_gestures_json() {
@@ -461,9 +524,8 @@ install_gesture_daemon() {
     warn "  ./scripts/install-endeavouros.sh --gestures"
     return 1
   fi
-  # Prefer absolute path for systemd; keep dual installs identical
+  # Prefer absolute path for systemd
   exe="$(readlink -f "$exe" 2>/dev/null || echo "$exe")"
-  sync_installed_binaries "$exe" || true
   log "Gesture daemon binary: $exe"
 
   if ! command -v libinput >/dev/null 2>&1; then
@@ -775,12 +837,17 @@ install_app_from_extract() {
   local share_dst
   share_dst="$(prefix_share)"
 
+  # Ensure destination dirs exist (user tree needs no root)
+  if [[ "$USER_INSTALL" -eq 1 ]]; then
+    as_user mkdir -p "$(prefix_bin)" "$(prefix_lib)" \
+      "$(prefix_share)/applications" "$(prefix_share)/icons/hicolor"
+  fi
+
   log "Installing binary → $bin_dst"
   install_file 755 "$bin_src" "$bin_dst"
 
-  # Keep other known install locations in sync so PATH/desktop don't keep an old copy.
-  # (Common failure: ~/.local/bin is earlier on PATH than /usr/local/bin → stale 0.2.x UI.)
-  sync_installed_binaries "$bin_dst" || true
+  # Never leave a second copy on PATH (the whole dual-install bug class)
+  remove_other_install
 
   if [[ -d "$lib_src" ]]; then
     log "Installing resources → $lib_dst"
@@ -814,7 +881,6 @@ install_app_from_extract() {
   if [[ -n "$desk_src" ]]; then
     local desk_dst="${share_dst}/applications/${APP_ID}.desktop"
     log "Installing desktop entry → $desk_dst"
-    # Ensure Exec is bare command name so PATH works for both prefixes
     local tmpdesk
     tmpdesk="$(mktemp)"
     sed -e "s|^Exec=.*|Exec=${APP_ID}|" \
@@ -848,15 +914,8 @@ install_app_from_extract() {
     esac
   fi
 
-  # Report which binary `command -v` will find (catches dual-install confusion)
   if command -v "$APP_ID" >/dev/null 2>&1; then
-    local which_bin
-    which_bin="$(command -v "$APP_ID")"
-    log "PATH resolves ${APP_ID} → ${which_bin}"
-    if [[ "$which_bin" != "$bin_dst" && -x "$bin_dst" ]]; then
-      warn "PATH prefers ${which_bin} over the just-installed ${bin_dst}."
-      warn "Both should now be the same build (dual-path sync). Re-open shells if needed."
-    fi
+    log "PATH resolves ${APP_ID} → $(command -v "$APP_ID")"
   fi
 
   log "App installed. Launch:  ${APP_ID}   or from the app menu."
@@ -872,24 +931,31 @@ do_verify() {
   log "MagicPad Companion — install checklist"
   echo ""
 
-  # Binary
-  local bin=""
+  # Binary — exactly one install location expected
+  local bin="" preferred
+  preferred="$(prefix_bin)/${APP_ID}"
+  if [[ "$USER_INSTALL" -eq 1 ]]; then
+    ok "prefix: $(target_home)/.local (user)"
+  else
+    ok "prefix: /usr/local (system)"
+  fi
   if bin="$(resolve_app_binary)"; then
-    ok "binary: $bin (canonical = newest)"
-    # Show all copies + mtimes; flag content mismatch
-    local p first="" mismatch=0
+    ok "binary: $bin"
+    if [[ "$bin" != "$preferred" && -x "$preferred" ]]; then
+      fail "expected $preferred but found $bin"
+      issues=$((issues + 1))
+    fi
+    local p extras=0
     while IFS= read -r p; do
       [[ -n "$p" && -e "$p" ]] || continue
-      printf '       also: %s (%s)\n' "$p" "$(stat -c '%y' "$p" 2>/dev/null | cut -d. -f1 || echo '?')"
-      if [[ -z "$first" ]]; then
-        first="$p"
-      elif ! cmp -s "$first" "$p" 2>/dev/null; then
-        mismatch=1
+      if [[ "$p" != "$bin" ]]; then
+        fail "extra copy at $p (should only install in one place) — re-run installer"
+        extras=$((extras + 1))
+        issues=$((issues + 1))
       fi
     done < <(all_known_bins | sort -u)
-    if [[ "$mismatch" -eq 1 ]]; then
-      fail "dual-install binaries differ — re-run install or: ./scripts/install-endeavouros.sh --gestures"
-      issues=$((issues + 1))
+    if [[ "$extras" -eq 0 ]]; then
+      ok "single install path only"
     fi
     if command -v "$APP_ID" >/dev/null 2>&1; then
       ok "PATH → $(command -v "$APP_ID")"
@@ -1044,6 +1110,9 @@ main() {
   echo " MagicPad Companion — EndeavourOS / Arch installer"
   echo " ${REPO_URL}"
   echo ""
+
+  # Pick ~/.local vs /usr/local once (exactly one install location)
+  resolve_prefix_mode
 
   if [[ "$MODE" == "uninstall" ]]; then
     do_uninstall
