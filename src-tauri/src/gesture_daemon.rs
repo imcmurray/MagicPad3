@@ -178,15 +178,25 @@ fn run_libinput_session(map: &GestureMap) -> Result<(), String> {
                     }
                 }
                 Parsed::HoldBegin { fingers } => {
-                    hold = Some(HoldState {
-                        fingers,
-                        started: Instant::now(),
-                    });
+                    // Only track multi-finger holds (3+). Single/two-finger holds are
+                    // normal click/press and must never become "screenshot".
+                    if (3..=5).contains(&fingers) {
+                        hold = Some(HoldState {
+                            fingers,
+                            started: Instant::now(),
+                        });
+                    } else {
+                        hold = None;
+                    }
                 }
                 Parsed::HoldEnd { fingers } => {
                     if let Some(h) = hold.take() {
-                        let f = if fingers > 0 { fingers } else { h.fingers };
-                        // Short hold ≈ multi-finger tap (libinput has no GESTURE_TAP)
+                        let f = if (3..=5).contains(&fingers) {
+                            fingers
+                        } else {
+                            h.fingers
+                        };
+                        // Short multi-finger hold ≈ tap (libinput has no GESTURE_TAP)
                         maybe_fire_tap(map, f, h.started.elapsed(), &mut last_fire);
                     }
                 }
@@ -275,9 +285,12 @@ fn parse_event(line: &str) -> Option<Parsed> {
         return Some(Parsed::PinchUpdate { fingers, scale });
     }
     if upper.contains("GESTURE_HOLD_BEGIN") {
-        return Some(Parsed::HoldBegin {
-            fingers: extract_fingers(line).unwrap_or(3),
-        });
+        // Never default finger count — a wrong default of 3 turns every click into a 3-finger tap
+        let fingers = extract_fingers(line)?;
+        if fingers < 3 {
+            return None;
+        }
+        return Some(Parsed::HoldBegin { fingers });
     }
     if upper.contains("GESTURE_HOLD_END") {
         return Some(Parsed::HoldEnd {
@@ -451,11 +464,15 @@ fn maybe_fire_tap(
     held_for: Duration,
     last_fire: &mut Instant,
 ) {
-    // Multi-finger "tap" ≈ short hold without a swipe/pinch following
-    if held_for > Duration::from_millis(450) {
+    // Strict: only 3 or 4 fingers. 1-finger click/hold must never fire screenshot.
+    if fingers != 3 && fingers != 4 {
         return;
     }
-    if last_fire.elapsed() < Duration::from_millis(400) {
+    // Multi-finger "tap" ≈ brief hold (not a long press)
+    if held_for < Duration::from_millis(20) || held_for > Duration::from_millis(400) {
+        return;
+    }
+    if last_fire.elapsed() < Duration::from_millis(500) {
         return;
     }
     let trigger = match fingers {
