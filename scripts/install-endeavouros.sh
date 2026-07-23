@@ -2,18 +2,21 @@
 # MagicPad Companion — EndeavourOS / Arch Linux installer
 #
 # Installs:
-#   • Runtime dependencies (pacman)
+#   • Runtime dependencies (pacman), including libinput-tools + wtype
 #   • App binary + desktop entry + icons (from GitHub release .deb, or local build)
 #   • udev rules for Magic Trackpad
-#   • Optional input-remapper profile + user systemd unit stub
+#   • Multi-finger gesture daemon (user systemd: magicpad-gestures.service)
+#   • Optional input-remapper profile
 #
 # Usage:
 #   ./scripts/install-endeavouros.sh              # full install (latest release)
-#   ./scripts/install-endeavouros.sh --helpers    # udev/helpers only
+#   ./scripts/install-endeavouros.sh --helpers    # udev + gesture daemon only
+#   ./scripts/install-endeavouros.sh --gestures   # gesture daemon only (app already installed)
+#   ./scripts/install-endeavouros.sh --no-gestures  # full install without starting daemon
 #   ./scripts/install-endeavouros.sh --local      # use local tauri release build
 #   ./scripts/install-endeavouros.sh --deb PATH   # install from a specific .deb
-#   ./scripts/install-endeavouros.sh --user       # install app under ~/.local (no root for app)
-#   ./scripts/install-endeavouros.sh --uninstall  # remove app + udev rule
+#   ./scripts/install-endeavouros.sh --user       # install app under ~/.local
+#   ./scripts/install-endeavouros.sh --uninstall  # remove app + udev + gesture service
 #
 # Docs: https://github.com/imcmurray/MagicPad3/blob/main/docs/linux-install.md
 
@@ -28,18 +31,21 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RULE_SRC_TREE="$ROOT/packaging/linux/99-magic-trackpad.rules"
 PROFILE_SRC_TREE="$ROOT/packaging/linux/input-remapper-profiles/MagicPad.json"
 UNIT_SRC_TREE="$ROOT/packaging/linux/magicpad-companion.service"
+GESTURES_UNIT_SRC="$ROOT/packaging/linux/magicpad-gestures.service"
 RULE_DST="/etc/udev/rules.d/99-magic-trackpad.rules"
 
 APP_ID="magicpad-companion"
 APP_NAME="MagicPad Companion"
 LIB_DIR_NAME="MagicPad Companion"
+GESTURES_UNIT="magicpad-gestures.service"
 
-MODE="full"          # full | helpers | uninstall
+MODE="full"          # full | helpers | gestures | uninstall
 SOURCE="release"     # release | local | deb
 DEB_PATH=""
 USER_INSTALL=0
 SKIP_DEPS=0
 WITH_REMAPPER=0
+INSTALL_GESTURES=1   # 0 with --no-gestures
 
 log()  { printf '==> %s\n' "$*"; }
 warn() { printf 'WARNING: %s\n' "$*" >&2; }
@@ -53,6 +59,8 @@ usage() {
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --helpers|--helpers-only) MODE="helpers"; shift ;;
+    --gestures|--gestures-only) MODE="gestures"; shift ;;
+    --no-gestures) INSTALL_GESTURES=0; shift ;;
     --local) SOURCE="local"; shift ;;
     --deb)
       SOURCE="deb"
@@ -68,6 +76,48 @@ while [[ $# -gt 0 ]]; do
     *) die "Unknown option: $1 (try --help)" ;;
   esac
 done
+
+# Target user for home dirs / systemd --user (when script is run via sudo)
+target_user() {
+  if [[ "$(id -u)" -eq 0 && -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]]; then
+    echo "$SUDO_USER"
+  else
+    echo "${USER:-$(id -un)}"
+  fi
+}
+
+target_home() {
+  local u
+  u="$(target_user)"
+  getent passwd "$u" | cut -d: -f6
+}
+
+target_uid() {
+  id -u "$(target_user)"
+}
+
+# Run a command as the desktop user (for systemctl --user, writing ~/.config)
+as_user() {
+  local u
+  u="$(target_user)"
+  if [[ "$(id -u)" -eq 0 && "$u" != "root" ]]; then
+    local uid runtime
+    uid="$(id -u "$u")"
+    runtime="/run/user/${uid}"
+    if command -v sudo >/dev/null 2>&1; then
+      sudo -u "$u" --preserve-env=WAYLAND_DISPLAY \
+        env "HOME=$(getent passwd "$u" | cut -d: -f6)" \
+            "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-$runtime}" \
+            "XDG_CONFIG_HOME=$(getent passwd "$u" | cut -d: -f6)/.config" \
+            "$@"
+    else
+      runuser -u "$u" -- env "HOME=$(getent passwd "$u" | cut -d: -f6)" \
+        "XDG_RUNTIME_DIR=${runtime}" "$@"
+    fi
+  else
+    "$@"
+  fi
+}
 
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "Missing required command: $1"

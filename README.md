@@ -157,7 +157,8 @@ chmod +x scripts/install-endeavouros.sh
 # then: magicpad-companion
 ```
 
-Options: `--local` (use a local `tauri build`), `--user`, `--helpers`, `--uninstall`.  
+Options: `--local`, `--user`, `--helpers`, `--gestures` (daemon only), `--no-gestures`, `--uninstall`.  
+The default install also enables the **multi-finger gesture daemon** (`magicpad-gestures.service`).  
 See [docs/linux-install.md](docs/linux-install.md).
 
 ### Windows driver package fetch

@@ -24,20 +24,25 @@ Replug the Magic Trackpad (or re-pair Bluetooth) and open the **Status** tab.
 
 | Flag | Effect |
 |------|--------|
-| *(default)* | Full install from latest GitHub release |
+| *(default)* | Full install from latest GitHub release **+ gesture daemon** |
 | `--local` | Use a local `tauri build` under `src-tauri/target/release/` |
 | `--deb PATH` | Install from a specific `.deb` file |
 | `--user` | Install app under `~/.local` (udev still needs root) |
-| `--helpers` | Only udev + remapper profile + user unit stub |
+| `--helpers` | udev + remapper staging **+ gesture daemon** |
+| `--gestures` | Gesture daemon only (app already installed) |
+| `--no-gestures` | Full/helpers install without starting the daemon |
 | `--with-remapper` | Also `pacman -S input-remapper` if available |
 | `--skip-deps` | Skip pacman package install |
-| `--uninstall` | Remove app files + udev rule |
+| `--uninstall` | Remove app, udev rule, and gesture service |
 
 Examples:
 
 ```bash
-# Helpers only (udev), if the app is already installed
+# Helpers only (udev + gestures), if the app is already installed
 ./scripts/install-endeavouros.sh --helpers
+
+# Re-enable / repair the gesture daemon only
+./scripts/install-endeavouros.sh --gestures
 
 # After a local production build
 npm run tauri -- build --bundles deb
@@ -121,26 +126,35 @@ bind 3/4-finger swipes natively**, so MagicPad runs a small user daemon:
 libinput debug-events  →  detect swipes  →  wtype (Super+Page Up/Down, …)
 ```
 
-### One-time setup
+### One-time setup (installer does this)
+
+The EndeavourOS installer (`./scripts/install-endeavouros.sh`) by default:
+
+1. Installs **libinput-tools** and **wtype**
+2. Adds your user to the **input** group
+3. Seeds `~/.config/magicpad-companion/gestures.json` (if missing)
+4. Installs and enables **`magicpad-gestures.service`** (user systemd)
+5. Adds an XDG autostart entry as backup
 
 ```bash
-sudo pacman -S --needed libinput-tools wtype
-sudo usermod -aG input "$USER"
-# log out and back in
+# Full install (includes daemon)
+./scripts/install-endeavouros.sh
+
+# Or only the daemon, if the app is already installed
+./scripts/install-endeavouros.sh --gestures
 ```
 
-The EndeavourOS installer installs these packages and adds the `input` group.
+**Log out and back in** once if you were just added to `input`.
 
-### Enable from the app
+### Enable / repair from the app
 
 1. Open **Gestures**
 2. Confirm daemon checklist (libinput-tools / wtype / input group)
 3. Click **Save gestures** (or **Start daemon**)
 
-This writes `~/.config/magicpad-companion/gestures.json` and enables:
-
 ```bash
 systemctl --user status magicpad-gestures.service
+systemctl --user restart magicpad-gestures.service
 ```
 
 ### Default Budgie/labwc mappings
