@@ -1,6 +1,10 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import type { GestureDaemonStatus, GestureMap as GMap } from "../lib/types";
+  import type {
+    GestureAction,
+    GestureDaemonStatus,
+    GestureMap as GMap,
+  } from "../lib/types";
   import { actionLabel, ALL_ACTIONS, triggerLabel } from "../lib/labels";
   import { api } from "../lib/api";
 
@@ -40,8 +44,29 @@
   }
 
   function setAction(index: number, action: string) {
+    const bindings = gestures.bindings.map((b, i) => {
+      if (i !== index) return b;
+      const next = action as GestureAction;
+      // Suggest a Flameshot example when switching 4-finger tap to Custom
+      let custom = b.custom;
+      if (
+        next === "custom" &&
+        !custom &&
+        b.trigger === "four_finger_tap"
+      ) {
+        custom = "flameshot gui";
+      }
+      if (next !== "custom") {
+        custom = null;
+      }
+      return { ...b, action: next, custom };
+    });
+    onChange({ ...gestures, bindings });
+  }
+
+  function setCustom(index: number, custom: string) {
     const bindings = gestures.bindings.map((b, i) =>
-      i === index ? { ...b, action: action as typeof b.action } : b,
+      i === index ? { ...b, custom: custom || null } : b,
     );
     onChange({ ...gestures, bindings });
   }
@@ -61,7 +86,7 @@
         Backend: <span class="mono">{gestures.backend}</span>
         {#if daemon?.available}
           — multi-finger swipes are handled by the MagicPad gesture daemon
-          (libinput → system shortcuts).
+          (libinput → system shortcuts / custom commands).
         {:else}
           — on Windows, the Precision driver / OS owns multi-finger gestures.
         {/if}
@@ -120,18 +145,31 @@
 
   <div class="table">
     {#each gestures.bindings as b, i (b.trigger)}
-      <div class="row" class:disabled={!b.available}>
+      <div class="row" class:disabled={!b.available} class:has-custom={b.action === "custom"}>
         <div class="trigger">{triggerLabel(b.trigger)}</div>
-        <select
-          disabled={!b.available || busy}
-          value={b.action}
-          onchange={(e) =>
-            setAction(i, (e.currentTarget as HTMLSelectElement).value)}
-        >
-          {#each ALL_ACTIONS as a}
-            <option value={a}>{actionLabel(a)}</option>
-          {/each}
-        </select>
+        <div class="controls">
+          <select
+            disabled={!b.available || busy}
+            value={b.action}
+            onchange={(e) =>
+              setAction(i, (e.currentTarget as HTMLSelectElement).value)}
+          >
+            {#each ALL_ACTIONS as a}
+              <option value={a}>{actionLabel(a)}</option>
+            {/each}
+          </select>
+          {#if b.action === "custom"}
+            <input
+              class="custom-cmd mono"
+              type="text"
+              placeholder="Shell command, e.g. flameshot gui"
+              disabled={!b.available || busy}
+              value={b.custom ?? ""}
+              oninput={(e) =>
+                setCustom(i, (e.currentTarget as HTMLInputElement).value)}
+            />
+          {/if}
+        </div>
         {#if !b.available}
           <span class="badge warn">OS only</span>
         {/if}
@@ -140,12 +178,21 @@
   </div>
 
   {#if daemon?.available}
-    <p class="muted small foot">
-      Defaults map to Budgie/labwc shortcuts: Super+Page Up/Down (workspaces),
-      Super+D (desktop), Super+A (Raven), Super+Tab (apps). Pinch out/in sends
-      Ctrl+= / Ctrl+- (zoom). 3/4-finger tap opens Budgie Screenshot. Save starts
-      <span class="mono">magicpad-gestures.service</span>.
-    </p>
+    <div class="muted small foot">
+      <p>
+        <strong>3-finger tap</strong> → Budgie Screenshot by default.
+        <strong>4-finger tap</strong> is unbound — set it to
+        <strong>Custom</strong> and enter a command (example below).
+      </p>
+      <p class="mono tip example">
+        4-finger tap → Custom → <code>flameshot gui</code>
+      </p>
+      <p>
+        Also: Super+Page Up/Down (workspaces), Super+D (desktop), Super+A
+        (Raven), pinch Ctrl+=/− (zoom). Save restarts
+        <span class="mono">magicpad-gestures.service</span>.
+      </p>
+    </div>
   {/if}
 </section>
 
@@ -203,6 +250,15 @@
     margin: 0.25rem 0 0.5rem;
     color: var(--accent);
   }
+  .example {
+    user-select: text;
+  }
+  .example code {
+    color: var(--text);
+    background: var(--bg-muted);
+    padding: 0.1rem 0.35rem;
+    border-radius: 4px;
+  }
   .result {
     margin: 0.5rem 0 0;
     white-space: pre-wrap;
@@ -211,6 +267,9 @@
   .foot {
     margin: 0.85rem 0 0;
   }
+  .foot p {
+    margin: 0.35rem 0;
+  }
   .table {
     display: flex;
     flex-direction: column;
@@ -218,9 +277,9 @@
   }
   .row {
     display: grid;
-    grid-template-columns: 1fr minmax(180px, 240px) auto;
+    grid-template-columns: minmax(140px, 1fr) minmax(200px, 1.4fr) auto;
     gap: 0.75rem;
-    align-items: center;
+    align-items: start;
     padding: 0.45rem 0.55rem;
     border-radius: var(--radius-sm);
     background: var(--bg-muted);
@@ -231,8 +290,28 @@
   .trigger {
     font-size: 0.9rem;
     font-weight: 500;
+    padding-top: 0.45rem;
   }
-  select {
+  .controls {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    min-width: 0;
+  }
+  select,
+  .custom-cmd {
     width: 100%;
+  }
+  .custom-cmd {
+    border: 1px solid var(--border);
+    background: var(--bg-elevated);
+    border-radius: var(--radius-sm);
+    padding: 0.4rem 0.55rem;
+    color: var(--text);
+    font-size: 0.82rem;
+  }
+  .custom-cmd:focus {
+    outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
+    border-color: var(--accent);
   }
 </style>

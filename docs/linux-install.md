@@ -169,11 +169,30 @@ systemctl --user restart magicpad-gestures.service
 | Pinch out | Zoom in | Ctrl+= |
 | Pinch in | Zoom out | Ctrl+- |
 | 3-finger tap | Budgie Screenshot | `org.buddiesofbudgie.BudgieScreenshot -i` |
-| 4-finger tap | Budgie Screenshot | same |
+| 4-finger tap | *(unbound)* | Set **Custom** in the app (e.g. Flameshot) |
 
 Pinch zoom works in Firefox, Chromium, many Electron apps, LibreOffice, etc.
 Focus the window you want to zoom first. Multi-finger taps use libinput
 **hold** gestures (short hold ≈ tap).
+
+### Custom command example: Flameshot on 4-finger tap
+
+1. Install Flameshot: `sudo pacman -S flameshot`
+2. Open MagicPad → **Gestures**
+3. Find **4-finger Tap**
+4. Action → **Custom**
+5. Command field → `flameshot gui`
+6. **Save gestures** (restarts the daemon)
+
+Other useful Flameshot commands:
+
+```bash
+flameshot gui          # interactive region
+flameshot full         # full screen
+flameshot gui -d 2000  # delay 2s then capture
+```
+
+You can put any shell command in **Custom** (e.g. `kitty`, `notify-send 'hi'`, a script path).
 
 ### Manual test
 

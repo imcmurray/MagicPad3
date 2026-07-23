@@ -281,7 +281,7 @@ seed_default_gestures_json() {
     { "trigger": "four_finger_swipe_right", "action": "browser_forward", "custom": null, "available": true },
     { "trigger": "four_finger_swipe_up", "action": "desktop_show", "custom": null, "available": true },
     { "trigger": "four_finger_swipe_down", "action": "notification_center", "custom": null, "available": true },
-    { "trigger": "four_finger_tap", "action": "screenshot", "custom": null, "available": true },
+    { "trigger": "four_finger_tap", "action": "none", "custom": null, "available": true },
     { "trigger": "pinch_in", "action": "zoom_out", "custom": null, "available": true },
     { "trigger": "pinch_out", "action": "zoom_in", "custom": null, "available": true }
   ],

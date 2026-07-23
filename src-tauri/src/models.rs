@@ -167,7 +167,8 @@ impl Default for GestureMap {
             (T::FourFingerSwipeRight, A::BrowserForward),
             (T::FourFingerSwipeUp, A::DesktopShow),
             (T::FourFingerSwipeDown, A::NotificationCenter),
-            (T::FourFingerTap, A::Screenshot),
+            // Leave unbound by default — map Custom + flameshot (etc.) in the UI
+            (T::FourFingerTap, A::None),
             (T::PinchIn, A::ZoomOut),
             (T::PinchOut, A::ZoomIn),
         ];

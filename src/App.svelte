@@ -22,7 +22,7 @@
 
   let nav: NavId = $state("status");
   let theme: ThemeMode = $state("system");
-  let version = $state("0.3.2");
+  let version = $state("0.3.3");
   const REPO_URL = "https://github.com/imcmurray/MagicPad3";
   let loading = $state(true);
   let busy = $state(false);

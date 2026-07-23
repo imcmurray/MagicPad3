@@ -24,9 +24,7 @@ pub fn load(config_dir: &Path) -> AppResult<GestureMap> {
             GestureTrigger::PinchOut if b.action == GestureAction::None => {
                 b.action = GestureAction::ZoomIn;
             }
-            GestureTrigger::ThreeFingerTap | GestureTrigger::FourFingerTap
-                if b.action == GestureAction::None =>
-            {
+            GestureTrigger::ThreeFingerTap if b.action == GestureAction::None => {
                 b.action = GestureAction::Screenshot;
             }
             _ => {}
