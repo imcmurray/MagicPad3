@@ -1,6 +1,6 @@
 [package]
 name = "magicpad-companion"
-version = "0.3.1"
+version = "0.3.2"
 description = "MagicPad Companion — Apple Magic Trackpad companion for Windows 11 and Linux"
 authors = ["MagicPad Companion Contributors"]
 edition = "2021"

@@ -60,6 +60,7 @@ export function actionLabel(a: GestureAction): string {
     media_play_pause: "Play / Pause",
     zoom_in: "Zoom in (Ctrl+=)",
     zoom_out: "Zoom out (Ctrl+-)",
+    screenshot: "Budgie Screenshot",
     custom: "Custom",
   };
   return map[a] ?? a;
@@ -81,6 +82,7 @@ export const ALL_ACTIONS: GestureAction[] = [
   "media_play_pause",
   "zoom_in",
   "zoom_out",
+  "screenshot",
   "custom",
 ];
 

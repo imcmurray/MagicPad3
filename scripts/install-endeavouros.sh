@@ -199,6 +199,19 @@ remove_path() {
 # ── Uninstall ──────────────────────────────────────────────────────────────
 do_uninstall() {
   log "Uninstalling MagicPad Companion…"
+
+  # Stop gesture daemon first
+  if as_user systemctl --user is-enabled --quiet "$GESTURES_UNIT" 2>/dev/null \
+    || as_user systemctl --user is-active --quiet "$GESTURES_UNIT" 2>/dev/null; then
+    log "Stopping gesture daemon…"
+    as_user systemctl --user disable --now "$GESTURES_UNIT" 2>/dev/null || true
+  fi
+  local home cfg
+  home="$(target_home)"
+  cfg="${home}/.config"
+  remove_path "${cfg}/systemd/user/${GESTURES_UNIT}"
+  remove_path "${cfg}/autostart/magicpad-gestures.desktop"
+
   remove_path "$(prefix_bin)/${APP_ID}"
   remove_path "$(prefix_lib)/${LIB_DIR_NAME}"
   remove_path "$(prefix_share)/applications/${APP_ID}.desktop"
@@ -219,6 +232,179 @@ do_uninstall() {
     gtk-update-icon-cache -f -t "$(prefix_share)/icons/hicolor" 2>/dev/null || true
   fi
   log "Uninstall complete. Config under ~/.config/magicpad-companion was left in place."
+}
+
+# ── Gesture daemon (user systemd) ───────────────────────────────────────────
+resolve_app_binary() {
+  local candidates=(
+    "$(prefix_bin)/${APP_ID}"
+    "/usr/local/bin/${APP_ID}"
+    "${HOME}/.local/bin/${APP_ID}"
+    "/usr/bin/${APP_ID}"
+    "$ROOT/src-tauri/target/release/${APP_ID}"
+  )
+  local c
+  for c in "${candidates[@]}"; do
+    if [[ -x "$c" ]]; then
+      echo "$c"
+      return 0
+    fi
+  done
+  if command -v "$APP_ID" >/dev/null 2>&1; then
+    command -v "$APP_ID"
+    return 0
+  fi
+  return 1
+}
+
+seed_default_gestures_json() {
+  local home cfg dir json
+  home="$(target_home)"
+  cfg="${home}/.config/magicpad-companion"
+  dir="$cfg"
+  json="${dir}/gestures.json"
+  if [[ -f "$json" ]]; then
+    log "Keeping existing gestures config: $json"
+    return 0
+  fi
+  mkdir -p "$dir"
+  # Matches GestureMap::default + pinch→zoom (v0.3.1+)
+  cat > "$json" <<'JSON'
+{
+  "bindings": [
+    { "trigger": "three_finger_swipe_left", "action": "prev_desktop", "custom": null, "available": true },
+    { "trigger": "three_finger_swipe_right", "action": "next_desktop", "custom": null, "available": true },
+    { "trigger": "three_finger_swipe_up", "action": "mission_control", "custom": null, "available": true },
+    { "trigger": "three_finger_swipe_down", "action": "app_expose", "custom": null, "available": true },
+    { "trigger": "three_finger_tap", "action": "screenshot", "custom": null, "available": true },
+    { "trigger": "four_finger_swipe_left", "action": "browser_back", "custom": null, "available": true },
+    { "trigger": "four_finger_swipe_right", "action": "browser_forward", "custom": null, "available": true },
+    { "trigger": "four_finger_swipe_up", "action": "desktop_show", "custom": null, "available": true },
+    { "trigger": "four_finger_swipe_down", "action": "notification_center", "custom": null, "available": true },
+    { "trigger": "four_finger_tap", "action": "screenshot", "custom": null, "available": true },
+    { "trigger": "pinch_in", "action": "zoom_out", "custom": null, "available": true },
+    { "trigger": "pinch_out", "action": "zoom_in", "custom": null, "available": true }
+  ],
+  "backend": "libinput-daemon"
+}
+JSON
+  # Fix ownership if we wrote as root into the user's home
+  if [[ "$(id -u)" -eq 0 ]]; then
+    local u
+    u="$(target_user)"
+    chown -R "$u:$u" "$cfg" 2>/dev/null || true
+  fi
+  log "Seeded default gestures → $json"
+}
+
+install_gesture_daemon() {
+  log "Configuring multi-finger gesture daemon…"
+
+  # Deps (may already be installed by install_deps)
+  if [[ "$SKIP_DEPS" -eq 0 ]] && command -v pacman >/dev/null 2>&1; then
+    run_root pacman -S --needed --noconfirm libinput-tools wtype 2>/dev/null \
+      || warn "Could not install libinput-tools/wtype via pacman — install them manually."
+  fi
+
+  local u home uid runtime wayland exe unit_dir unit autostart_dir
+  u="$(target_user)"
+  home="$(target_home)"
+  uid="$(target_uid)"
+  runtime="${XDG_RUNTIME_DIR:-/run/user/${uid}}"
+  wayland="${WAYLAND_DISPLAY:-wayland-0}"
+
+  if ! exe="$(resolve_app_binary)"; then
+    warn "magicpad-companion binary not found — install the app first, then re-run:"
+    warn "  ./scripts/install-endeavouros.sh --gestures"
+    return 1
+  fi
+  log "Gesture daemon binary: $exe"
+
+  if ! command -v libinput >/dev/null 2>&1; then
+    warn "libinput CLI missing (package: libinput-tools). Daemon cannot start yet."
+  fi
+  if ! command -v wtype >/dev/null 2>&1 && ! command -v xdotool >/dev/null 2>&1; then
+    warn "wtype missing (package: wtype). Daemon cannot inject keys yet."
+  fi
+
+  # input group
+  if ! id -nG "$u" 2>/dev/null | tr ' ' '\n' | grep -qx input; then
+    log "Adding $u to the 'input' group (required to read trackpad events)…"
+    run_root usermod -aG input "$u"
+    warn "Log out and back in so 'input' group membership applies, then:"
+    warn "  systemctl --user restart ${GESTURES_UNIT}"
+  else
+    log "User $u is in the input group."
+  fi
+
+  seed_default_gestures_json
+
+  unit_dir="${home}/.config/systemd/user"
+  mkdir -p "$unit_dir"
+  unit="${unit_dir}/${GESTURES_UNIT}"
+
+  cat > "$unit" <<EOF
+[Unit]
+Description=MagicPad Companion multi-finger gesture daemon
+Documentation=${REPO_URL}
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=${exe} --gestures
+Restart=on-failure
+RestartSec=2
+Environment=RUST_LOG=info
+Environment=WAYLAND_DISPLAY=${wayland}
+Environment=XDG_RUNTIME_DIR=${runtime}
+
+[Install]
+WantedBy=graphical-session.target
+WantedBy=default.target
+EOF
+
+  autostart_dir="${home}/.config/autostart"
+  mkdir -p "$autostart_dir"
+  cat > "${autostart_dir}/magicpad-gestures.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=MagicPad Gestures
+Comment=Multi-finger trackpad gestures for MagicPad Companion
+Exec=${exe} --gestures
+X-GNOME-Autostart-enabled=true
+Hidden=false
+NoDisplay=true
+EOF
+
+  if [[ "$(id -u)" -eq 0 ]]; then
+    chown -R "$u:$u" "${home}/.config/systemd" "${home}/.config/autostart" \
+      "${home}/.config/magicpad-companion" 2>/dev/null || true
+  fi
+
+  log "Installed user unit → $unit"
+  log "Installed autostart → ${autostart_dir}/magicpad-gestures.desktop"
+
+  # Enable + start under the user session when possible
+  if as_user systemctl --user daemon-reload 2>/dev/null; then
+    if as_user systemctl --user enable --now "$GESTURES_UNIT" 2>/dev/null; then
+      log "Gesture daemon enabled and started (${GESTURES_UNIT})"
+    else
+      warn "Could not start ${GESTURES_UNIT} yet (no user session bus?)."
+      warn "After login run:  systemctl --user enable --now ${GESTURES_UNIT}"
+    fi
+  else
+    warn "systemctl --user not available in this context."
+    warn "After graphical login run:"
+    warn "  systemctl --user daemon-reload"
+    warn "  systemctl --user enable --now ${GESTURES_UNIT}"
+  fi
+
+  if as_user systemctl --user is-active --quiet "$GESTURES_UNIT" 2>/dev/null; then
+    log "Status: gesture daemon is active"
+  else
+    warn "Daemon not active yet — usually needs a re-login after joining 'input' group."
+  fi
 }
 
 # ── Dependencies ────────────────────────────────────────────────────────────
@@ -518,11 +704,20 @@ main() {
     return
   fi
 
+  if [[ "$MODE" == "gestures" ]]; then
+    install_gesture_daemon || true
+    log "Done (gesture daemon). Check: systemctl --user status ${GESTURES_UNIT}"
+    return
+  fi
+
   if [[ "$MODE" == "helpers" ]]; then
     local rule="$RULE_SRC_TREE"
     [[ -f "$rule" ]] || die "Run from a git checkout (missing packaging/linux)."
     install_helpers "$rule"
-    log "Done (helpers only). Replug the trackpad, then open MagicPad Companion."
+    if [[ "$INSTALL_GESTURES" -eq 1 ]]; then
+      install_gesture_daemon || true
+    fi
+    log "Done (helpers). Replug the trackpad, then open MagicPad Companion."
     return
   fi
 
@@ -548,13 +743,21 @@ main() {
     warn "No udev rule found to install."
   fi
 
+  if [[ "$INSTALL_GESTURES" -eq 1 ]]; then
+    install_gesture_daemon || true
+  else
+    log "Skipped gesture daemon (--no-gestures)."
+  fi
+
   echo ""
   log "Install complete."
   echo ""
   echo "  Next steps:"
-  echo "    1. Replug the Magic Trackpad (or re-pair Bluetooth)"
-  echo "    2. Start the app:  ${APP_ID}"
-  echo "    3. Check Status tab for VID 05AC / PID 0324"
+  echo "    1. Log out/in if you were just added to the 'input' group"
+  echo "    2. Replug the Magic Trackpad (or re-pair Bluetooth)"
+  echo "    3. Start the app:  ${APP_ID}"
+  echo "    4. Gestures: systemctl --user status ${GESTURES_UNIT}"
+  echo "       (3-finger swipe L/R = workspaces; pinch = zoom)"
   echo ""
   echo "  Docs: ${REPO_URL}/blob/main/docs/linux-install.md"
   echo ""

@@ -168,9 +168,12 @@ systemctl --user restart magicpad-gestures.service
 | 4-finger swipe down | Raven panel | Super+A |
 | Pinch out | Zoom in | Ctrl+= |
 | Pinch in | Zoom out | Ctrl+- |
+| 3-finger tap | Budgie Screenshot | `org.buddiesofbudgie.BudgieScreenshot -i` |
+| 4-finger tap | Budgie Screenshot | same |
 
 Pinch zoom works in Firefox, Chromium, many Electron apps, LibreOffice, etc.
-Focus the window you want to zoom first.
+Focus the window you want to zoom first. Multi-finger taps use libinput
+**hold** gestures (short hold ≈ tap).
 
 ### Manual test
 

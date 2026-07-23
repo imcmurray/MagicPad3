@@ -15,7 +15,7 @@ pub fn load(config_dir: &Path) -> AppResult<GestureMap> {
     }
     let mut map: GestureMap = serde_json::from_str(&std::fs::read_to_string(path)?)?;
     map.backend = detect_backend();
-    // Upgrade older configs that left pinch unbound
+    // Upgrade older configs that left pinch / multi-finger tap unbound
     for b in &mut map.bindings {
         match b.trigger {
             GestureTrigger::PinchIn if b.action == GestureAction::None => {
@@ -23,6 +23,11 @@ pub fn load(config_dir: &Path) -> AppResult<GestureMap> {
             }
             GestureTrigger::PinchOut if b.action == GestureAction::None => {
                 b.action = GestureAction::ZoomIn;
+            }
+            GestureTrigger::ThreeFingerTap | GestureTrigger::FourFingerTap
+                if b.action == GestureAction::None =>
+            {
+                b.action = GestureAction::Screenshot;
             }
             _ => {}
         }
@@ -172,6 +177,7 @@ fn action_name(a: GestureAction) -> &'static str {
         MediaPlayPause => "play_pause",
         ZoomIn => "zoom_in",
         ZoomOut => "zoom_out",
+        Screenshot => "screenshot",
         Custom => "custom",
     }
 }

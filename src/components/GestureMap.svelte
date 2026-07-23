@@ -143,7 +143,7 @@
     <p class="muted small foot">
       Defaults map to Budgie/labwc shortcuts: Super+Page Up/Down (workspaces),
       Super+D (desktop), Super+A (Raven), Super+Tab (apps). Pinch out/in sends
-      Ctrl+= / Ctrl+- (browser and app zoom). Save starts the user service
+      Ctrl+= / Ctrl+- (zoom). 3/4-finger tap opens Budgie Screenshot. Save starts
       <span class="mono">magicpad-gestures.service</span>.
     </p>
   {/if}

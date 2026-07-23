@@ -111,6 +111,7 @@ fn run_libinput_session(map: &GestureMap) -> Result<(), String> {
 
     let mut swipe: Option<SwipeState> = None;
     let mut pinch: Option<PinchState> = None;
+    let mut hold: Option<HoldState> = None;
     let mut last_fire = Instant::now() - Duration::from_secs(1);
 
     for line in reader.lines() {
@@ -126,6 +127,7 @@ fn run_libinput_session(map: &GestureMap) -> Result<(), String> {
         if let Some(ev) = parse_event(line) {
             match ev {
                 Parsed::SwipeBegin { fingers } => {
+                    hold = None; // swipe cancels pending hold/tap
                     swipe = Some(SwipeState {
                         fingers,
                         dx: 0.0,
@@ -153,6 +155,7 @@ fn run_libinput_session(map: &GestureMap) -> Result<(), String> {
                     }
                 }
                 Parsed::PinchBegin { fingers } => {
+                    hold = None;
                     pinch = Some(PinchState {
                         fingers,
                         scale: 1.0,
@@ -166,6 +169,19 @@ fn run_libinput_session(map: &GestureMap) -> Result<(), String> {
                 Parsed::PinchEnd => {
                     if let Some(p) = pinch.take() {
                         maybe_fire_pinch(map, p.scale, &mut last_fire);
+                    }
+                }
+                Parsed::HoldBegin { fingers } => {
+                    hold = Some(HoldState {
+                        fingers,
+                        started: Instant::now(),
+                    });
+                }
+                Parsed::HoldEnd { fingers } => {
+                    if let Some(h) = hold.take() {
+                        let f = if fingers > 0 { fingers } else { h.fingers };
+                        // Short hold ≈ multi-finger tap (libinput has no GESTURE_TAP)
+                        maybe_fire_tap(map, f, h.started.elapsed(), &mut last_fire);
                     }
                 }
             }
@@ -192,6 +208,12 @@ struct PinchState {
 }
 
 #[derive(Debug)]
+struct HoldState {
+    fingers: u8,
+    started: Instant,
+}
+
+#[derive(Debug)]
 enum Parsed {
     SwipeBegin { fingers: u8 },
     SwipeUpdate { fingers: u8, dx: f64, dy: f64 },
@@ -199,6 +221,8 @@ enum Parsed {
     PinchBegin { fingers: u8 },
     PinchUpdate { #[allow(dead_code)] fingers: u8, scale: f64 },
     PinchEnd,
+    HoldBegin { fingers: u8 },
+    HoldEnd { fingers: u8 },
 }
 
 /// Parse a single libinput debug-events line.
@@ -209,6 +233,8 @@ fn parse_event(line: &str) -> Option<Parsed> {
     //  event3  GESTURE_SWIPE_END    +1.400s  3
     //  event3  GESTURE_PINCH_BEGIN  +2.0s  2
     //  event3  GESTURE_PINCH_UPDATE +2.1s  2 1.05 (0.50/0.00 unaccelerated)
+    //  event3  GESTURE_HOLD_BEGIN   +3.0s  3
+    //  event3  GESTURE_HOLD_END     +3.1s  3
     let upper = line.to_ascii_uppercase();
     if !upper.contains("GESTURE_") {
         return None;
@@ -241,6 +267,16 @@ fn parse_event(line: &str) -> Option<Parsed> {
         let fingers = extract_fingers(line).unwrap_or(2);
         let scale = extract_scale(line).unwrap_or(1.0);
         return Some(Parsed::PinchUpdate { fingers, scale });
+    }
+    if upper.contains("GESTURE_HOLD_BEGIN") {
+        return Some(Parsed::HoldBegin {
+            fingers: extract_fingers(line).unwrap_or(3),
+        });
+    }
+    if upper.contains("GESTURE_HOLD_END") {
+        return Some(Parsed::HoldEnd {
+            fingers: extract_fingers(line).unwrap_or(0),
+        });
     }
     None
 }
@@ -381,6 +417,30 @@ fn maybe_fire_swipe(
     }
 }
 
+fn maybe_fire_tap(
+    map: &GestureMap,
+    fingers: u8,
+    held_for: Duration,
+    last_fire: &mut Instant,
+) {
+    // Multi-finger "tap" ≈ short hold without a swipe/pinch following
+    if held_for > Duration::from_millis(450) {
+        return;
+    }
+    if last_fire.elapsed() < Duration::from_millis(400) {
+        return;
+    }
+    let trigger = match fingers {
+        3 => GestureTrigger::ThreeFingerTap,
+        4 => GestureTrigger::FourFingerTap,
+        _ => return,
+    };
+    if fire_trigger(map, trigger) {
+        *last_fire = Instant::now();
+        log::info!("gesture {:?} fingers={} held={:?}", trigger, fingers, held_for);
+    }
+}
+
 fn maybe_fire_pinch(map: &GestureMap, scale: f64, last_fire: &mut Instant) {
     // Slightly longer debounce so continuous pinch doesn't spam zoom steps
     if last_fire.elapsed() < Duration::from_millis(280) {
@@ -427,13 +487,18 @@ fn execute_action(binding: &GestureBinding) {
         }
     }
 
-    if let Some(keys) = action_to_keys(binding.action) {
-        inject_keys(&keys);
-        return;
+    // Prefer spawning apps (screenshot tool) before key injection
+    if let Some(cmd) = action_to_command(binding.action) {
+        match Command::new("sh").args(["-c", cmd]).status() {
+            Ok(s) if s.success() => return,
+            Ok(_) | Err(_) => {
+                // fall through to key chord fallback when available
+            }
+        }
     }
 
-    if let Some(cmd) = action_to_command(binding.action) {
-        let _ = Command::new("sh").args(["-c", cmd]).spawn();
+    if let Some(keys) = action_to_keys(binding.action) {
+        inject_keys(&keys);
     }
 }
 
@@ -480,6 +545,11 @@ fn action_to_keys(action: GestureAction) -> Option<KeyChord> {
             mods: vec!["ctrl"],
             key: "minus".into(),
         }),
+        // Prefer launching the app via action_to_command; Print as last resort
+        Screenshot => Some(KeyChord {
+            mods: vec![],
+            key: "Print".into(),
+        }),
         GestureAction::None | Custom => Option::None,
     }
 }
@@ -492,6 +562,22 @@ fn action_to_command(action: GestureAction) -> Option<&'static str> {
         GestureAction::VolumeDown => {
             Some("pactl set-sink-volume @DEFAULT_SINK@ -5% 2>/dev/null || true")
         }
+        GestureAction::Screenshot => Some(
+            // Budgie Screenshot interactive UI (EndeavourOS Budgie default).
+            // Exit non-zero if none found so we can fall back to Print key.
+            "if command -v org.buddiesofbudgie.BudgieScreenshot >/dev/null; then \
+               org.buddiesofbudgie.BudgieScreenshot -i; \
+             elif command -v dbus-send >/dev/null; then \
+               dbus-send --type=method_call \
+                 --dest=org.buddiesofbudgie.BudgieScreenshotControl \
+                 /org/buddiesofbudgie/ScreenshotControl \
+                 org.buddiesofbudgie.BudgieScreenshotControl.StartMainWindow; \
+             elif command -v gnome-screenshot >/dev/null; then \
+               gnome-screenshot -i; \
+             elif command -v flameshot >/dev/null; then \
+               flameshot gui; \
+             else exit 1; fi",
+        ),
         _ => None,
     }
 }

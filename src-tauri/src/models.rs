@@ -131,6 +131,8 @@ pub enum GestureAction {
     ZoomIn,
     /// Ctrl+-  — browser / document zoom out
     ZoomOut,
+    /// Open Budgie Screenshot (or desktop screenshot tool)
+    Screenshot,
     Custom,
 }
 
@@ -160,12 +162,12 @@ impl Default for GestureMap {
             (T::ThreeFingerSwipeRight, A::NextDesktop),
             (T::ThreeFingerSwipeUp, A::MissionControl),
             (T::ThreeFingerSwipeDown, A::AppExpose),
-            (T::ThreeFingerTap, A::None),
+            (T::ThreeFingerTap, A::Screenshot),
             (T::FourFingerSwipeLeft, A::BrowserBack),
             (T::FourFingerSwipeRight, A::BrowserForward),
             (T::FourFingerSwipeUp, A::DesktopShow),
             (T::FourFingerSwipeDown, A::NotificationCenter),
-            (T::FourFingerTap, A::None),
+            (T::FourFingerTap, A::Screenshot),
             (T::PinchIn, A::ZoomOut),
             (T::PinchOut, A::ZoomIn),
         ];

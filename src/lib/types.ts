@@ -70,6 +70,7 @@ export type GestureAction =
   | "media_play_pause"
   | "zoom_in"
   | "zoom_out"
+  | "screenshot"
   | "custom";
 
 export interface GestureBinding {
