@@ -663,11 +663,20 @@ install_helpers() {
   home="$(target_home)"
 
   [[ -f "$rule_src" ]] || die "udev rule missing: $rule_src"
-  log "Installing udev rule → $RULE_DST"
-  run_root install -m 644 "$rule_src" "$RULE_DST"
-  run_root udevadm control --reload-rules
-  run_root udevadm trigger
-  log "udev rules installed."
+  if [[ -f "$RULE_DST" ]] && cmp -s "$rule_src" "$RULE_DST" 2>/dev/null; then
+    log "udev rule already up to date → $RULE_DST"
+  else
+    log "Installing udev rule → $RULE_DST"
+    if run_root install -m 644 "$rule_src" "$RULE_DST" \
+      && run_root udevadm control --reload-rules \
+      && run_root udevadm trigger; then
+      log "udev rules installed."
+    elif [[ -f "$RULE_DST" ]]; then
+      warn "Could not update udev rule (need sudo?) — existing rule left in place."
+    else
+      warn "Could not install udev rule (need sudo?). Re-run in a terminal with sudo access."
+    fi
+  fi
 
   ensure_input_group
 
